@@ -61,7 +61,14 @@ def _create_user_and_sign_in(sb, tenant_id: str | None, role: str) -> tuple[str,
 @pytest.fixture(scope="session")
 def _atendente(test_tenant):
     sb = get_service_client()
-    return _create_user_and_sign_in(sb, test_tenant["id"], "atendente")
+    token, user_id = _create_user_and_sign_in(sb, test_tenant["id"], "atendente")
+    yield token, user_id
+    # user_profiles.id referencia auth.users(id) on delete cascade (Task 2), mas
+    # apagamos a linha explicitamente antes como salvaguarda caso a cascade não
+    # dispare por algum motivo — delete_user sozinho já é suficiente hoje
+    # (confirmado manualmente), mas isso não deve ficar implícito.
+    sb.table("user_profiles").delete().eq("id", user_id).execute()
+    sb.auth.admin.delete_user(user_id)
 
 
 @pytest.fixture(scope="session")
@@ -77,7 +84,10 @@ def atendente_user_id(_atendente) -> str:
 @pytest.fixture(scope="session")
 def _gestor(test_tenant):
     sb = get_service_client()
-    return _create_user_and_sign_in(sb, test_tenant["id"], "gestor")
+    token, user_id = _create_user_and_sign_in(sb, test_tenant["id"], "gestor")
+    yield token, user_id
+    sb.table("user_profiles").delete().eq("id", user_id).execute()
+    sb.auth.admin.delete_user(user_id)
 
 
 @pytest.fixture(scope="session")
@@ -93,7 +103,12 @@ def gestor_user_id(_gestor) -> str:
 @pytest.fixture(scope="session")
 def _admin():
     sb = get_service_client()
-    return _create_user_and_sign_in(sb, None, "admin_saas")
+    token, user_id = _create_user_and_sign_in(sb, None, "admin_saas")
+    yield token, user_id
+    # tenant_id é None aqui, então o delete por tenant_id em test_tenant nunca
+    # alcança esta linha — precisa ser removida aqui mesmo.
+    sb.table("user_profiles").delete().eq("id", user_id).execute()
+    sb.auth.admin.delete_user(user_id)
 
 
 @pytest.fixture(scope="session")
