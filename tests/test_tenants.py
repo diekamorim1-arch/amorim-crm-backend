@@ -1,8 +1,18 @@
+from app.core.supabase_client import get_service_client
 from tests.conftest import auth_headers
 
 
 def test_atendente_nao_lista_tenants(client, atendente_token):
     response = client.get("/api/v1/tenants", headers=auth_headers(atendente_token))
+    assert response.status_code == 403
+
+
+def test_atendente_nao_atualiza_tenant(client, atendente_token, test_tenant):
+    # Atendente pertence ao mesmo test_tenant, mas só gestor (ou admin_saas) pode
+    # editar a loja — atendente não deve conseguir mesmo sendo do próprio tenant.
+    response = client.patch(
+        f"/api/v1/tenants/{test_tenant['id']}", json={"name": "Hack Interno"}, headers=auth_headers(atendente_token)
+    )
     assert response.status_code == 403
 
 
@@ -37,4 +47,34 @@ def test_admin_impersona_e_ve_dados_do_tenant(client, admin_token, gestor_token,
 
 def test_atendente_nao_impersona(client, atendente_token, test_tenant):
     response = client.post(f"/api/v1/tenants/{test_tenant['id']}/impersonate", headers=auth_headers(atendente_token))
+    assert response.status_code == 403
+
+
+def test_admin_cria_tenant_e_gestor_padrao(client, admin_token):
+    response = client.post(
+        "/api/v1/tenants", json={"name": "Loja Nova Criada"}, headers=auth_headers(admin_token)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Loja Nova Criada"
+    assert body["plan"] == "starter"
+    assert body["slug"].startswith("loja-nova-criada-")
+
+    sb = get_service_client()
+    try:
+        gestor_rows = sb.table("user_profiles").select("*").eq("tenant_id", body["id"]).execute().data
+        assert len(gestor_rows) == 1
+        assert gestor_rows[0]["role"] == "gestor"
+        assert gestor_rows[0]["name"] == "Gestor Loja Nova Criada"
+    finally:
+        # Loja + gestor padrão criados de verdade pelo endpoint — não fazem parte
+        # das fixtures de sessão, então a limpeza é responsabilidade deste teste
+        # (mesma disciplina do try/finally em test_users.py).
+        for row in sb.table("user_profiles").select("id").eq("tenant_id", body["id"]).execute().data:
+            sb.auth.admin.delete_user(row["id"])
+        sb.table("tenants").delete().eq("id", body["id"]).execute()
+
+
+def test_gestor_nao_cria_tenant(client, gestor_token):
+    response = client.post("/api/v1/tenants", json={"name": "Não Deveria Existir"}, headers=auth_headers(gestor_token))
     assert response.status_code == 403

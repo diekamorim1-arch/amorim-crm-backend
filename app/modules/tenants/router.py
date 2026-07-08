@@ -26,7 +26,9 @@ def create(body: TenantCreate, _: AuthContext = Depends(require_role("admin_saas
 
 @router.patch("/{tenant_id}", response_model=TenantOut)
 def update(tenant_id: str, body: TenantUpdate, user: AuthContext = Depends(get_current_user)):
-    return service.update_tenant(tenant_id, user.tenant_id, user.role == "admin_saas", body.name, body.plan)
+    return service.update_tenant(
+        tenant_id, user.tenant_id, user.role, user.role == "admin_saas", body.name, body.plan
+    )
 
 
 @router.patch("/{tenant_id}/settings", response_model=TenantOut)

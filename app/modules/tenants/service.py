@@ -36,8 +36,15 @@ def create_tenant(name: str, plan: str) -> dict:
     return tenant
 
 
-def update_tenant(tenant_id: str, requester_tenant_id: str | None, is_admin: bool, name: str | None, plan: str | None) -> dict:
-    if not is_admin and requester_tenant_id != tenant_id:
+def update_tenant(
+    tenant_id: str,
+    requester_tenant_id: str | None,
+    requester_role: str,
+    is_admin: bool,
+    name: str | None,
+    plan: str | None,
+) -> dict:
+    if not is_admin and (requester_role != "gestor" or requester_tenant_id != tenant_id):
         raise AppError(403, "forbidden", "Você só pode editar a própria loja.")
     patch = {k: v for k, v in {"name": name, "plan": plan}.items() if v is not None}
     if not patch:
