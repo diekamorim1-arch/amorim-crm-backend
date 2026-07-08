@@ -4,9 +4,9 @@
 
 **Goal:** Construir do zero a API REST em FastAPI que substitui o `localStorage`/reducer do frontend Amorim CRM por persistência real na Supabase, cobrindo os 11 módulos e a autenticação descritos no spec de requisitos de backend.
 
-**Architecture:** FastAPI com um módulo Python por recurso (`app/modules/<recurso>/{router,schemas,service}.py`), cliente Supabase único com **service-role key** (autorização decidida em Python, RLS como rede de segurança), autenticação via JWT emitido pela Supabase Auth e validado localmente via JWKS. Integração com WhatsApp via EvolutionAPI: webhook de entrada, chamada HTTP de saída.
+**Architecture:** FastAPI com um módulo Python por recurso (`app/modules/<recurso>/{router,schemas,service}.py`), cliente Supabase único com **service-role key** (autorização decidida em Python, RLS como rede de segurança), autenticação via JWT emitido pela Supabase Auth e validado contra a própria Supabase (`auth.get_user()`) — sem gerenciar segredo de assinatura algum no backend. Integração com WhatsApp via EvolutionAPI: webhook de entrada, chamada HTTP de saída.
 
-**Tech Stack:** Python 3.11+, FastAPI, Pydantic v2, `supabase-py` (cliente oficial), PyJWT (+ `PyJWKClient`), pytest + pytest-asyncio + httpx (testes de integração contra o projeto Supabase real), python-dotenv.
+**Tech Stack:** Python 3.11+, FastAPI, Pydantic v2, `supabase-py` (cliente oficial — também usado para validar JWT via `auth.get_user()`, sem depender de JWT secret/JWKS), pytest + pytest-asyncio + httpx (testes de integração contra o projeto Supabase real), python-dotenv.
 
 ## Global Constraints
 
@@ -460,7 +460,35 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `app/core/errors.py`, `app/core/auth.py`, `app/deps.py`, `app/modules/__init__.py`, `app/modules/auth/__init__.py`, `app/modules/auth/router.py`, `app/modules/auth/schemas.py`, `tests/test_auth_core.py`, `tests/test_auth_router.py`
-- Modify: `app/main.py` (registra exception handlers + inclui `auth.router`), `tests/conftest.py` (adiciona fixtures de tenant/usuários reais)
+- Modify: `app/main.py` (registra exception handlers + inclui `auth.router`), `tests/conftest.py` (adiciona fixtures de tenant/usuários reais), `app/config.py` (remove o campo `supabase_jwks_url`, não usado — ver Step 0 abaixo), `requirements.txt` (remove `pyjwt[crypto]`, não usado — ver Step 4)
+
+- [ ] **Step 0: Limpar `app/config.py`** — remover o campo `supabase_jwks_url` e o `model_validator` que o preenchia (herdados do desenho original via JWKS, substituído pela validação via `sb.auth.get_user()`, ver nota após o bloco de Interfaces). O arquivo final:
+
+```python
+from functools import lru_cache
+
+from dotenv import load_dotenv
+from pydantic_settings import BaseSettings
+
+load_dotenv()
+
+
+class Settings(BaseSettings):
+    supabase_url: str
+    supabase_service_role_key: str
+    supabase_anon_key: str
+    evolution_api_url: str = ""
+    evolution_api_key: str = ""
+    evolution_webhook_secret: str = ""
+    environment: str = "development"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+Atualizar `.env.example` também, removendo a linha `SUPABASE_JWKS_URL` se ela tiver sido adicionada manualmente (o arquivo original da Task 1 não tinha essa linha — confirme que não é preciso mudar nada lá).
 
 **Interfaces (Produces — contrato para todas as tasks de módulo seguintes):**
 
@@ -482,8 +510,10 @@ class AuthContext:
     email: str
 
 def extract_claims(payload: dict) -> AuthContext: ...  # pura, sem I/O
-def decode_token(token: str) -> dict: ...               # verifica assinatura via JWKS (rede)
+def decode_token(token: str) -> dict: ...               # valida contra a Supabase Auth (rede)
 ```
+
+**Correção de arquitetura (pós-scaffold, antes desta task ser implementada):** a verificação de JWT originalmente desenhada via JWKS/`PyJWKClient` foi substituída por uma chamada direta à Supabase Auth (`sb.auth.get_user(token)`). Motivo: o projeto Supabase deste app usa o sistema **legado** de JWT secret compartilhado (confirmado pela chave anônima do projeto, assinada em HS256) — não o sistema novo de signing keys assimétricas que a JWKS serve. Em vez de gerenciar mais um segredo (`SUPABASE_JWT_SECRET`) só para verificação local, delegamos a validação à própria Supabase: `sb.auth.get_user(token)` chama `GET /auth/v1/user` com o Bearer token e retorna os dados do usuário (incluindo `app_metadata`) se o token for válido, ou lança erro se não for — funciona idêntico independente de qual sistema de signing o projeto usa, hoje ou no futuro, e não exige nenhum segredo além da `SUPABASE_SERVICE_ROLE_KEY` que todo o resto do backend já usa. `PyJWT`/`PyJWKClient` deixam de ser necessários — remova `pyjwt[crypto]` de `requirements.txt` como parte do Step 4 abaixo.
 
 ```python
 # app/deps.py
@@ -496,6 +526,7 @@ def require_tenant(user: AuthContext = Depends(get_current_user)) -> str: ...  #
 # tests/conftest.py — fixtures novas (session-scoped, criam/destroem dado real na Supabase)
 # test_tenant: dict com {"id": ..., "slug": ...}
 # atendente_token / gestor_token: str (JWT real de um usuário criado só para o teste)
+# admin_token: str (JWT real de um usuário admin_saas de teste, tenant_id None)
 # auth_headers(token): dict -> {"Authorization": f"Bearer {token}"}
 ```
 
@@ -574,11 +605,8 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app.core.auth'`
 ```python
 from dataclasses import dataclass
 
-import jwt
-from jwt import PyJWKClient
-
-from app.config import get_settings
 from app.core.errors import AppError
+from app.core.supabase_client import get_service_client
 
 
 @dataclass
@@ -603,19 +631,22 @@ def extract_claims(payload: dict) -> AuthContext:
 
 
 def decode_token(token: str) -> dict:
-    settings = get_settings()
+    sb = get_service_client()
     try:
-        jwk_client = PyJWKClient(settings.supabase_jwks_url)
-        signing_key = jwk_client.get_signing_key_from_jwt(token)
-        return jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["ES256", "RS256"],
-            audience="authenticated",
-            options={"verify_aud": True},
-        )
-    except jwt.PyJWTError as exc:
+        response = sb.auth.get_user(token)
+    except Exception as exc:
         raise AppError(401, "invalid_token", "Token inválido ou expirado.") from exc
+    if not response or not response.user:
+        raise AppError(401, "invalid_token", "Token inválido ou expirado.")
+    user = response.user
+    return {"sub": user.id, "email": user.email, "app_metadata": user.app_metadata or {}}
+```
+
+Remover também `pyjwt[crypto]` de `requirements.txt` (Task 1) — não é mais usado em lugar nenhum do projeto:
+
+```bash
+sed -i '/pyjwt/d' requirements.txt
+pip uninstall -y pyjwt
 ```
 
 - [ ] **Step 5: Rodar e confirmar que passa**
@@ -634,12 +665,24 @@ from app.core.auth import AuthContext, decode_token, extract_claims
 from app.core.errors import AppError
 
 
-async def get_current_user(authorization: str = Header(default="")) -> AuthContext:
+async def get_current_user(
+    authorization: str = Header(default=""),
+    x_impersonate_tenant: str | None = Header(default=None),
+) -> AuthContext:
     if not authorization.startswith("Bearer "):
         raise AppError(401, "missing_token", "Cabeçalho Authorization ausente ou inválido.")
     token = authorization.removeprefix("Bearer ").strip()
     payload = decode_token(token)
-    return extract_claims(payload)
+    context = extract_claims(payload)
+    # Impersonação (Task 4): admin_saas manda o header X-Impersonate-Tenant numa
+    # requisição normal, autenticada com o PRÓPRIO JWT — nada de mintar token
+    # novo. "Voltar ao painel" é só parar de mandar o header, sem estado nenhum
+    # pra invalidar.
+    if x_impersonate_tenant and context.role == "admin_saas":
+        return AuthContext(
+            user_id=context.user_id, tenant_id=x_impersonate_tenant, role="gestor", email=context.email
+        )
+    return context
 
 
 def require_role(*roles: str) -> Callable[..., AuthContext]:
@@ -731,40 +774,77 @@ def test_tenant():
     sb.table("tenants").delete().eq("id", tenant["id"]).execute()
 
 
-def _create_user_and_sign_in(sb, tenant_id: str, role: str) -> str:
+def _create_user_and_sign_in(sb, tenant_id: str | None, role: str) -> tuple[str, str]:
+    """Cria um usuário real de teste e loga. Retorna (access_token, user_id) —
+    o id vem direto da resposta de criação, nunca decodificado do JWT depois
+    (o projeto não usa mais PyJWT em lugar nenhum, ver Task 3 Step 4)."""
     email = f"{role}.{uuid.uuid4().hex[:8]}@teste.amorimcrm.com.br"
     password = "SenhaDeTeste123!"
+    app_metadata = {"role": role} if tenant_id is None else {"tenant_id": tenant_id, "role": role}
     created = sb.auth.admin.create_user(
-        {
-            "email": email,
-            "password": password,
-            "email_confirm": True,
-            "app_metadata": {"tenant_id": tenant_id, "role": role},
-        }
+        {"email": email, "password": password, "email_confirm": True, "app_metadata": app_metadata}
     )
     user_id = created.user.id
     sb.table("user_profiles").insert(
         {"id": user_id, "tenant_id": tenant_id, "role": role, "name": f"Teste {role.title()}"}
     ).execute()
     session = sb.auth.sign_in_with_password({"email": email, "password": password})
-    return session.session.access_token
+    return session.session.access_token, user_id
 
 
 @pytest.fixture(scope="session")
-def atendente_token(test_tenant):
+def _atendente(test_tenant):
     sb = get_service_client()
     return _create_user_and_sign_in(sb, test_tenant["id"], "atendente")
 
 
 @pytest.fixture(scope="session")
-def gestor_token(test_tenant):
+def atendente_token(_atendente) -> str:
+    return _atendente[0]
+
+
+@pytest.fixture(scope="session")
+def atendente_user_id(_atendente) -> str:
+    return _atendente[1]
+
+
+@pytest.fixture(scope="session")
+def _gestor(test_tenant):
     sb = get_service_client()
     return _create_user_and_sign_in(sb, test_tenant["id"], "gestor")
+
+
+@pytest.fixture(scope="session")
+def gestor_token(_gestor) -> str:
+    return _gestor[0]
+
+
+@pytest.fixture(scope="session")
+def gestor_user_id(_gestor) -> str:
+    return _gestor[1]
+
+
+@pytest.fixture(scope="session")
+def _admin():
+    sb = get_service_client()
+    return _create_user_and_sign_in(sb, None, "admin_saas")
+
+
+@pytest.fixture(scope="session")
+def admin_token(_admin) -> str:
+    return _admin[0]
+
+
+@pytest.fixture(scope="session")
+def admin_user_id(_admin) -> str:
+    return _admin[1]
 
 
 def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 ```
+
+**Interfaces (atualiza o bloco desta task):** `gestor_user_id`/`atendente_user_id`/`admin_user_id` já existem a partir desta task — tasks seguintes (5 em diante) as consomem diretamente, sem precisar redefini-las.
 
 - [ ] **Step 11: `tests/test_auth_router.py`** (prova a cadeia completa: JWT real emitido pela Supabase → `get_current_user` → papel/tenant corretos)
 
@@ -784,18 +864,39 @@ def test_me_sem_token(client):
     response = client.get("/api/v1/auth/me")
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "missing_token"
+
+
+def test_admin_impersonando_tenant_via_header(client, admin_token, test_tenant):
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["role"] == "gestor"
+    assert body["tenant_id"] == test_tenant["id"]
+
+
+def test_gestor_nao_consegue_impersonar(client, gestor_token, test_tenant):
+    # header só tem efeito quando o papel do token é admin_saas — gestor tentando
+    # usá-lo continua vendo a própria sessão, sem escalar privilégio.
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={**auth_headers(gestor_token), "X-Impersonate-Tenant": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert response.json()["tenant_id"] == test_tenant["id"]
 ```
 
 - [ ] **Step 12: Rodar a suíte completa**
 
 Run: `pytest -v`
-Expected: `7 passed` (os 2 anteriores + 3 de `test_auth_core` + 2 de `test_auth_router`)
+Expected: `9 passed` (os 2 anteriores + 3 de `test_auth_core` + 4 de `test_auth_router`)
 
 - [ ] **Step 13: Commit**
 
 ```bash
 git add app/core/errors.py app/core/auth.py app/deps.py app/modules/ app/main.py tests/
-git commit -m "feat: nucleo de autenticacao JWT (JWKS), erros padronizados e fixtures de teste
+git commit -m "feat: nucleo de autenticacao via Supabase Auth, erros padronizados e fixtures de teste
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -809,7 +910,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Modify: `app/main.py` (inclui os 2 novos routers)
 
 **Interfaces:**
-- Consumes: `get_current_user`, `require_role`, `require_tenant` (`app/deps.py`), `get_service_client` (`app/core/supabase_client.py`), `AppError`, fixtures `client`/`test_tenant`/`atendente_token`/`gestor_token`/`auth_headers` (`tests/conftest.py`).
+- Consumes: `get_current_user`, `require_role`, `require_tenant` (`app/deps.py`), `get_service_client` (`app/core/supabase_client.py`), `AppError`, fixtures `client`/`test_tenant`/`atendente_token`/`gestor_token`/`admin_token`/`auth_headers` (`tests/conftest.py`). O mecanismo de impersonação (header `X-Impersonate-Tenant`) já existe em `get_current_user` desde a Task 3 — este módulo só oferece o endpoint que valida o tenant antes do frontend começar a mandar o header.
 - Produces: nada consumido por outro módulo de recurso (Tenants/Users são folhas na árvore de dependências).
 
 **Comportamento:**
@@ -817,7 +918,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - `POST /tenants` (`admin_saas`): cria tenant + um `user_profiles`/`auth.users` gestor padrão "Gestor {name}" (compound, mesma regra do `TenantFormDialog` do frontend).
 - `PATCH /tenants/{id}` (`gestor` só do próprio tenant, `admin_saas` qualquer um): atualiza `name`/`plan`.
 - `PATCH /tenants/{id}/settings` (`gestor` só do próprio tenant): atualiza o jsonb `settings`.
-- `POST /tenants/{id}/impersonate` (`admin_saas`): FastAPI assina um JWT próprio (HS256, mesmo formato de claims `app_metadata.{tenant_id,role}`) usando `SUPABASE_JWT_SECRET` — **decisão desta task**: para o token de impersonação ser aceito por `decode_token` (que hoje só valida ES256/RS256 via JWKS), adicionamos um segredo compartilhado extra só para esse caso. Ver Step abaixo.
+- `POST /tenants/{id}/impersonate` (`admin_saas`): **não minta nenhum token novo** — o mecanismo de impersonação (header `X-Impersonate-Tenant`, avaliado em `get_current_user`) já foi construído na Task 3. Este endpoint só confirma que o tenant existe e retorna `{tenant_id, tenant_name}`; o frontend passa a mandar `X-Impersonate-Tenant: <tenant_id>` em toda requisição seguinte enquanto durar a sessão de impersonação (parar de mandar o header = "Voltar ao painel", sem estado nenhum pra invalidar no backend).
 - `GET /users` (`atendente`, `gestor`): lista `user_profiles` do tenant da sessão.
 - `POST /users/invite` (`gestor`): cria usuário real via `sb.auth.admin.create_user` com `app_metadata` + linha em `user_profiles`.
 - `PATCH /users/{id}/role` (`gestor`): atualiza o papel em `user_profiles` E em `app_metadata` do `auth.users` (via `sb.auth.admin.update_user_by_id`) — os dois têm que ficar sincronizados, senão o próximo login do usuário traria o papel antigo no JWT.
@@ -860,7 +961,8 @@ class TenantSettingsUpdate(BaseModel):
 
 
 class ImpersonateResponse(BaseModel):
-    access_token: str
+    tenant_id: str
+    tenant_name: str
 ```
 
 - [ ] **Step 2: `app/modules/tenants/service.py`**
@@ -870,9 +972,6 @@ import re
 import unicodedata
 import uuid
 
-import jwt
-
-from app.config import get_settings
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
 
@@ -928,47 +1027,12 @@ def update_tenant_settings(tenant_id: str, requester_tenant_id: str, patch: dict
     return sb.table("tenants").update({"settings": merged}).eq("id", tenant_id).execute().data[0]
 
 
-def impersonate(tenant_id: str, admin_user_id: str) -> str:
+def check_tenant_for_impersonation(tenant_id: str) -> dict:
     sb = get_service_client()
-    tenant = sb.table("tenants").select("id").eq("id", tenant_id).execute().data
-    if not tenant:
+    rows = sb.table("tenants").select("id, name").eq("id", tenant_id).execute().data
+    if not rows:
         raise AppError(404, "not_found", "Loja não encontrada.")
-    settings = get_settings()
-    payload = {
-        "sub": admin_user_id,
-        "email": "impersonation@amorimcrm.internal",
-        "aud": "authenticated",
-        "app_metadata": {"tenant_id": tenant_id, "role": "gestor"},
-    }
-    return jwt.encode(payload, settings.impersonation_secret, algorithm="HS256")
-```
-
-Isso exige um novo campo em `Settings` (Task 1's `config.py`, atualize agora):
-
-```python
-# adicionar em app/config.py, classe Settings
-impersonation_secret: str
-```
-
-E em `.env.example`: `IMPERSONATION_SECRET=` (gerar um valor aleatório longo com `python -c "import secrets; print(secrets.token_hex(32))"` e colocar no `.env` real).
-
-E `decode_token` (`app/core/auth.py`, Task 3) precisa aceitar esse segredo como alternativa ao JWKS — atualize a função:
-
-```python
-def decode_token(token: str) -> dict:
-    settings = get_settings()
-    try:
-        return jwt.decode(token, settings.impersonation_secret, algorithms=["HS256"], audience="authenticated")
-    except jwt.PyJWTError:
-        pass
-    try:
-        jwk_client = PyJWKClient(settings.supabase_jwks_url)
-        signing_key = jwk_client.get_signing_key_from_jwt(token)
-        return jwt.decode(
-            token, signing_key.key, algorithms=["ES256", "RS256"], audience="authenticated", options={"verify_aud": True}
-        )
-    except jwt.PyJWTError as exc:
-        raise AppError(401, "invalid_token", "Token inválido ou expirado.") from exc
+    return rows[0]
 ```
 
 - [ ] **Step 3: `app/modules/tenants/router.py`**
@@ -1011,10 +1075,12 @@ def update_settings(tenant_id: str, body: TenantSettingsUpdate, user: AuthContex
 
 
 @router.post("/{tenant_id}/impersonate", response_model=ImpersonateResponse)
-def impersonate(tenant_id: str, user: AuthContext = Depends(require_role("admin_saas"))):
-    token = service.impersonate(tenant_id, user.user_id)
-    return ImpersonateResponse(access_token=token)
+def impersonate(tenant_id: str, _: AuthContext = Depends(require_role("admin_saas"))):
+    tenant = service.check_tenant_for_impersonation(tenant_id)
+    return ImpersonateResponse(tenant_id=tenant["id"], tenant_name=tenant["name"])
 ```
+
+O frontend passa a mandar `X-Impersonate-Tenant: <tenant_id>` em toda requisição seguinte — o mecanismo de override já está em `get_current_user` (Task 3), nada mais a fazer aqui.
 
 - [ ] **Step 4: `tests/test_tenants.py`**
 
@@ -1041,6 +1107,23 @@ def test_gestor_nao_atualiza_outro_tenant(client, gestor_token):
         json={"name": "Hack"},
         headers=auth_headers(gestor_token),
     )
+    assert response.status_code == 403
+
+
+def test_admin_impersona_e_ve_dados_do_tenant(client, admin_token, gestor_token, test_tenant):
+    impersonate = client.post(f"/api/v1/tenants/{test_tenant['id']}/impersonate", headers=auth_headers(admin_token))
+    assert impersonate.status_code == 200
+    assert impersonate.json()["tenant_id"] == test_tenant["id"]
+
+    as_gestor_via_impersonation = client.get(
+        "/api/v1/tenants", headers={**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]}
+    )
+    # role vira "gestor" ao impersonar — perde acesso ao endpoint admin_saas-only.
+    assert as_gestor_via_impersonation.status_code == 403
+
+
+def test_atendente_nao_impersona(client, atendente_token, test_tenant):
+    response = client.post(f"/api/v1/tenants/{test_tenant['id']}/impersonate", headers=auth_headers(atendente_token))
     assert response.status_code == 403
 ```
 
@@ -1188,7 +1271,7 @@ def health() -> dict[str, str]:
 - [ ] **Step 10: Rodar a suíte completa**
 
 Run: `pytest -v`
-Expected: todos os testes anteriores + 3 de `test_tenants` + 2 de `test_users` passando.
+Expected: todos os testes anteriores + 5 de `test_tenants` + 2 de `test_users` passando.
 
 - [ ] **Step 11: Commit**
 
@@ -1417,15 +1500,7 @@ def test_atualizar_contato_inexistente_404(client, gestor_token):
     assert response.status_code == 404
 ```
 
-Esse teste usa uma fixture nova, `gestor_user_id` — adicione em `tests/conftest.py` (mesmo arquivo da Task 3), retornando o `sub`/`id` do usuário gestor de teste:
-
-```python
-@pytest.fixture(scope="session")
-def gestor_user_id(gestor_token) -> str:
-    import jwt as pyjwt
-
-    return pyjwt.decode(gestor_token, options={"verify_signature": False})["sub"]
-```
+Esse teste usa `gestor_user_id`, fixture já criada na Task 3 (`tests/conftest.py`) — nenhuma ação extra necessária aqui.
 
 - [ ] **Step 5: Reescrever `app/main.py` por completo:**
 
@@ -2937,13 +3012,12 @@ from tests.conftest import auth_headers
 from app.core.supabase_client import get_service_client
 
 
-def test_atendente_ve_so_a_propria_conexao(client, gestor_token, atendente_token, test_tenant, gestor_user_id):
-    import jwt as pyjwt
-
-    atendente_id = pyjwt.decode(atendente_token, options={"verify_signature": False})["sub"]
+def test_atendente_ve_so_a_propria_conexao(
+    client, gestor_token, atendente_token, test_tenant, gestor_user_id, atendente_user_id
+):
     sb = get_service_client()
     sb.table("connections").insert({"tenant_id": test_tenant["id"], "user_id": gestor_user_id, "phone": "+5511000000001"}).execute()
-    sb.table("connections").insert({"tenant_id": test_tenant["id"], "user_id": atendente_id, "phone": "+5511000000002"}).execute()
+    sb.table("connections").insert({"tenant_id": test_tenant["id"], "user_id": atendente_user_id, "phone": "+5511000000002"}).execute()
 
     as_atendente = client.get("/api/v1/connections", headers=auth_headers(atendente_token))
     assert len(as_atendente.json()) == 1
@@ -3265,9 +3339,10 @@ def other_tenant():
 
 
 @pytest.fixture(scope="module")
-def other_gestor_token(other_tenant):
+def other_gestor_token(other_tenant) -> str:
     sb = get_service_client()
-    return _create_user_and_sign_in(sb, other_tenant["id"], "gestor")
+    token, _ = _create_user_and_sign_in(sb, other_tenant["id"], "gestor")
+    return token
 
 
 def test_contatos_nao_vazam_entre_tenants(client, gestor_token, other_gestor_token, gestor_user_id):
