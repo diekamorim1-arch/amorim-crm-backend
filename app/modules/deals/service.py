@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
+from app.core.tenant_guard import verify_owned_by_tenant
 
 PRODUCT_LINE_LABELS = {
     "iphone": "iPhone", "ipad": "iPad", "mac": "Mac", "watch": "Apple Watch",
@@ -25,6 +26,7 @@ def list_deals(tenant_id: str, stage: str | None, outcome: str | None, owner_id:
 
 def create_lead(tenant_id: str, name: str, whatsapp: str, origin: str, product_line: str | None, value: float, owner_id: str) -> dict:
     sb = get_service_client()
+    verify_owned_by_tenant("user_profiles", owner_id, tenant_id, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     product_label = PRODUCT_LINE_LABELS.get(product_line, "Novo negócio")
 
@@ -63,6 +65,8 @@ def create_lead(tenant_id: str, name: str, whatsapp: str, origin: str, product_l
 
 def create_deal(tenant_id: str, data: dict) -> dict:
     sb = get_service_client()
+    verify_owned_by_tenant("contacts", data["contact_id"], tenant_id, "Cliente não encontrado.")
+    verify_owned_by_tenant("user_profiles", data["owner_id"], tenant_id, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     payload = {**data, "tenant_id": tenant_id, "stage": "novo_lead", "outcome": "aberto", "stage_changed_at": now}
     return sb.table("deals").insert(payload).execute().data[0]

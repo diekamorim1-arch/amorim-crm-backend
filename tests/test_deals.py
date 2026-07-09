@@ -1,5 +1,7 @@
+import uuid
+
 from app.core.supabase_client import get_service_client
-from tests.conftest import auth_headers
+from tests.conftest import _create_user_and_sign_in, auth_headers
 
 
 def _create_lead(client, token, owner_id, **overrides):
@@ -223,3 +225,63 @@ def test_mover_deal_inexistente_404(client, gestor_token):
         headers=auth_headers(gestor_token),
     )
     assert response.status_code == 404
+
+
+def test_nao_cria_lead_ou_deal_referenciando_recursos_de_outro_tenant(client, gestor_token, gestor_user_id):
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert({"name": "Loja Alheia", "slug": f"alheia-{uuid.uuid4().hex[:8]}"}).execute().data[0]
+    try:
+        foreign_token, foreign_user_id = _create_user_and_sign_in(sb, foreign_tenant["id"], "gestor")
+        try:
+            foreign_contact = (
+                sb.table("contacts")
+                .insert(
+                    {
+                        "tenant_id": foreign_tenant["id"], "name": "Cliente Alheio", "whatsapp": "+5511900001111",
+                        "origin": "whatsapp_direto", "owner_id": foreign_user_id,
+                    }
+                )
+                .execute()
+                .data[0]
+            )
+            try:
+                # 1) /leads com owner_id de OUTRO tenant: create_lead precisa
+                # validar que o responsável pertence ao tenant do chamador
+                # antes de criar contact/deal referenciando esse id.
+                lead_response = client.post(
+                    "/api/v1/leads",
+                    json={
+                        "name": "Lead Indevido", "whatsapp": "+5511900002222", "origin": "instagram_organico",
+                        "value": 1000, "owner_id": foreign_user_id,
+                    },
+                    headers=auth_headers(gestor_token),
+                )
+                assert lead_response.status_code == 404
+
+                leaked_contacts = (
+                    sb.table("contacts").select("id").eq("whatsapp", "+5511900002222").execute().data
+                )
+                assert leaked_contacts == []
+
+                # 2) /deals com contact_id de OUTRO tenant (owner_id válido no
+                # próprio tenant): create_deal precisa validar contact_id
+                # antes de inserir a linha cross-tenant.
+                deal_response = client.post(
+                    "/api/v1/deals",
+                    json={
+                        "contact_id": foreign_contact["id"], "title": "Negócio Indevido", "products": "iPhone",
+                        "value": 2000, "payment": "pix", "owner_id": gestor_user_id,
+                    },
+                    headers=auth_headers(gestor_token),
+                )
+                assert deal_response.status_code == 404
+
+                leaked_deals = sb.table("deals").select("id").eq("contact_id", foreign_contact["id"]).execute().data
+                assert leaked_deals == []
+            finally:
+                sb.table("contacts").delete().eq("id", foreign_contact["id"]).execute()
+        finally:
+            sb.table("user_profiles").delete().eq("id", foreign_user_id).execute()
+            sb.auth.admin.delete_user(foreign_user_id)
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()

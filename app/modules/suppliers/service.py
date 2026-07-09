@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
+from app.core.tenant_guard import verify_owned_by_tenant
 
 
 def list_suppliers(tenant_id: str, search: str | None) -> list[dict]:
@@ -43,6 +44,7 @@ def list_products(tenant_id: str, supplier_id: str) -> list[dict]:
 
 def create_product(tenant_id: str, supplier_id: str, name: str, current_price: float) -> dict:
     sb = get_service_client()
+    verify_owned_by_tenant("suppliers", supplier_id, tenant_id, "Fornecedor não encontrado.")
     now = datetime.now(UTC).isoformat()
     return (
         sb.table("supplier_products")

@@ -1,3 +1,5 @@
+import uuid
+
 from app.core.supabase_client import get_service_client
 from tests.conftest import auth_headers
 
@@ -180,6 +182,35 @@ def test_produto_inexistente_retorna_404_ao_atualizar_preco(client, gestor_token
     fake_id = "00000000-0000-0000-0000-000000000000"
     resp = client.patch(f"/api/v1/supplier-products/{fake_id}/price", json={"price": 100}, headers=auth_headers(gestor_token))
     assert resp.status_code == 404
+
+
+def test_nao_cria_produto_referenciando_fornecedor_de_outro_tenant(client, gestor_token):
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert({"name": "Loja Alheia", "slug": f"alheia-{uuid.uuid4().hex[:8]}"}).execute().data[0]
+    try:
+        foreign_supplier = (
+            sb.table("suppliers")
+            .insert({"tenant_id": foreign_tenant["id"], "name": "Fornecedor Alheio", "whatsapp": "+5511900000000"})
+            .execute()
+            .data[0]
+        )
+        try:
+            # gestor do test_tenant tenta criar um produto referenciando um
+            # supplier_id que pertence a OUTRO tenant: precisa ser bloqueado
+            # com 404, nunca inserir a linha cross-tenant silenciosamente.
+            response = client.post(
+                f"/api/v1/suppliers/{foreign_supplier['id']}/products",
+                json={"name": "Produto Indevido", "current_price": 100},
+                headers=auth_headers(gestor_token),
+            )
+            assert response.status_code == 404
+
+            leaked = sb.table("supplier_products").select("id").eq("supplier_id", foreign_supplier["id"]).execute().data
+            assert leaked == []
+        finally:
+            sb.table("suppliers").delete().eq("id", foreign_supplier["id"]).execute()
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
 
 
 def test_busca_por_nome_filtra_fornecedores(client, gestor_token):
