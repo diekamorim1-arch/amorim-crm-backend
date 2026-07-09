@@ -7,6 +7,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.connections.router import router as connections_router
 from app.modules.contacts.router import router as contacts_router
 from app.modules.conversations.router import router as conversations_router
+from app.modules.dashboard.router import router as dashboard_router
 from app.modules.deals.router import router as deals_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.modules.tenants.router import router as tenants_router
@@ -26,6 +27,7 @@ app.include_router(evolution_webhook_router, prefix="/api/v1")
 app.include_router(appointments_router, prefix="/api/v1")
 app.include_router(activities_router, prefix="/api/v1")
 app.include_router(connections_router, prefix="/api/v1")
+app.include_router(dashboard_router, prefix="/api/v1")
 
 
 @app.get("/health")
