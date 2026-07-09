@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.core.errors import register_exception_handlers
+from app.modules.appointments.router import router as appointments_router
 from app.modules.auth.router import router as auth_router
 from app.modules.contacts.router import router as contacts_router
 from app.modules.conversations.router import router as conversations_router
@@ -20,6 +21,7 @@ app.include_router(deals_router, prefix="/api/v1")
 app.include_router(suppliers_router, prefix="/api/v1")
 app.include_router(conversations_router, prefix="/api/v1")
 app.include_router(evolution_webhook_router, prefix="/api/v1")
+app.include_router(appointments_router, prefix="/api/v1")
 
 
 @app.get("/health")
