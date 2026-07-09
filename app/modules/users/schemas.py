@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -12,8 +14,8 @@ class UserOut(BaseModel):
 class UserInvite(BaseModel):
     name: str
     email: str
-    role: str
+    role: Literal["atendente", "gestor"]
 
 
 class UserRoleUpdate(BaseModel):
-    role: str
+    role: Literal["atendente", "gestor"]

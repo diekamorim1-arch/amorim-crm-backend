@@ -139,6 +139,26 @@ def test_webhook_rejeita_assinatura_invalida(client):
     assert response.status_code == 401
 
 
+def test_webhook_com_payload_malformado_retorna_400_com_envelope(client):
+    # Important #3 do whole-branch review: payload sem a chave "message" (por
+    # exemplo, um evento diferente da EvolutionAPI) causava um KeyError não
+    # tratado -> 500 cru do FastAPI, quebrando o contrato de erro
+    # {"error": {"code", "message"}}. Assinatura válida, payload malformado.
+    settings = get_settings()
+    payload = {"instance": {"phone": "+5511900006666"}}  # sem "message"
+    body = json.dumps(payload).encode()
+    signature = hmac.new(settings.evolution_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/api/v1/webhooks/evolution",
+        content=body,
+        headers={"x-evolution-signature": signature, "content-type": "application/json"},
+    )
+    assert response.status_code == 400
+    body_json = response.json()
+    assert body_json["error"]["code"] == "invalid_payload"
+
+
 def test_webhook_aceita_assinatura_valida_e_processa_mensagem(client, gestor_token, gestor_user_id, test_tenant):
     """Cobertura de caminho feliz do webhook sem depender de uma instância real
     da EvolutionAPI: computamos a assinatura HMAC com o mesmo segredo que o

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
+from app.core.tenant_guard import verify_owned_by_tenant
 
 
 def list_contacts(
@@ -37,6 +38,9 @@ def get_contact(tenant_id: str, contact_id: str) -> dict:
 
 def create_contact(tenant_id: str, data: dict) -> dict:
     sb = get_service_client()
+    owner_id = data.get("owner_id")
+    if owner_id is not None:
+        verify_owned_by_tenant("user_profiles", owner_id, tenant_id, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     payload = {
         **data,
@@ -53,6 +57,8 @@ def update_contact(tenant_id: str, contact_id: str, patch: dict) -> dict:
     clean_patch = {k: v for k, v in patch.items() if v is not None}
     if not clean_patch:
         raise AppError(400, "empty_patch", "Nenhum campo para atualizar.")
+    if "owner_id" in clean_patch:
+        verify_owned_by_tenant("user_profiles", clean_patch["owner_id"], tenant_id, "Responsável não encontrado.")
     rows = (
         sb.table("contacts")
         .update(clean_patch)

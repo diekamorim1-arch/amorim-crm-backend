@@ -227,6 +227,54 @@ def test_mover_deal_inexistente_404(client, gestor_token):
     assert response.status_code == 404
 
 
+def test_financials_rejeita_supplier_product_de_outro_tenant(client, gestor_token, gestor_user_id):
+    # Important #1 do whole-branch review: update_financials gravava
+    # supplier_product_id sem checar tenant — mesma classe de vulnerabilidade
+    # já corrigida 5x neste build (ver tenant_guard.py). Cria um fornecedor +
+    # produto reais em OUTRO tenant e confirma 404 + financials inalterados.
+    sb = get_service_client()
+    deal = _create_lead(client, gestor_token, gestor_user_id, whatsapp="+5511955552222")
+    foreign_tenant = sb.table("tenants").insert(
+        {"name": "Loja Alheia Financials", "slug": f"alheia-fin-{uuid.uuid4().hex[:8]}"}
+    ).execute().data[0]
+    try:
+        foreign_supplier = (
+            sb.table("suppliers")
+            .insert({"tenant_id": foreign_tenant["id"], "name": "Fornecedor Alheio", "whatsapp": "+5511900003333"})
+            .execute()
+            .data[0]
+        )
+        try:
+            foreign_product = (
+                sb.table("supplier_products")
+                .insert(
+                    {
+                        "tenant_id": foreign_tenant["id"], "supplier_id": foreign_supplier["id"],
+                        "name": "Produto Alheio", "current_price": 999,
+                    }
+                )
+                .execute()
+                .data[0]
+            )
+            try:
+                response = client.patch(
+                    f"/api/v1/deals/{deal['id']}/financials",
+                    json={"supplier_product_id": foreign_product["id"], "supplier_value": 500, "gift_value": 0},
+                    headers=auth_headers(gestor_token),
+                )
+                assert response.status_code == 404
+
+                unchanged = sb.table("deals").select("supplier_product_id").eq("id", deal["id"]).execute().data[0]
+                assert unchanged["supplier_product_id"] is None
+            finally:
+                sb.table("supplier_products").delete().eq("id", foreign_product["id"]).execute()
+        finally:
+            sb.table("suppliers").delete().eq("id", foreign_supplier["id"]).execute()
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+        _cleanup_lead(deal["contact_id"])
+
+
 def test_nao_cria_lead_ou_deal_referenciando_recursos_de_outro_tenant(client, gestor_token, gestor_user_id):
     sb = get_service_client()
     foreign_tenant = sb.table("tenants").insert({"name": "Loja Alheia", "slug": f"alheia-{uuid.uuid4().hex[:8]}"}).execute().data[0]

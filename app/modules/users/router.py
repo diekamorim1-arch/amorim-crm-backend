@@ -19,5 +19,5 @@ def invite(body: UserInvite, user: AuthContext = Depends(require_role("gestor"))
 
 
 @router.patch("/{user_id}/role", response_model=UserOut)
-def update_role(user_id: str, body: UserRoleUpdate, _: AuthContext = Depends(require_role("gestor"))):
-    return service.update_role(user_id, body.role)
+def update_role(user_id: str, body: UserRoleUpdate, user: AuthContext = Depends(require_role("gestor"))):
+    return service.update_role(user_id, body.role, user.tenant_id)

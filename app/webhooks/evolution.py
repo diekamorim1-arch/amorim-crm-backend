@@ -24,9 +24,12 @@ async def receive_evolution_webhook(request: Request, x_evolution_signature: str
     _verify_signature(raw_body, x_evolution_signature)
     payload = await request.json()
 
-    instance_phone = payload["instance"]["phone"]
-    from_number = payload["message"]["from"]
-    text = payload["message"]["text"]
+    try:
+        instance_phone = payload["instance"]["phone"]
+        from_number = payload["message"]["from"]
+        text = payload["message"]["text"]
+    except (KeyError, TypeError) as exc:
+        raise AppError(400, "invalid_payload", "Payload do webhook malformado.") from exc
 
     sb = get_service_client()
     connection = sb.table("connections").select("*").eq("phone", instance_phone).execute().data

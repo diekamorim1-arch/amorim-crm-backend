@@ -1,5 +1,7 @@
+import uuid
+
 from app.core.supabase_client import get_service_client
-from tests.conftest import auth_headers
+from tests.conftest import _create_user_and_sign_in, auth_headers
 
 
 def _create_contact(client, token, owner_id, **overrides):
@@ -127,6 +129,65 @@ def test_filtros_por_origin_owner_tag_e_search(client, gestor_token, gestor_user
     finally:
         _delete_contact(alvo["id"])
         _delete_contact(outro["id"])
+
+
+def test_criar_contato_rejeita_owner_id_de_outro_tenant(client, gestor_token):
+    # Important #2 do whole-branch review: create_contact gravava owner_id
+    # sem checar tenant. Cria um gestor real em OUTRO tenant e usa seu id
+    # como owner_id — espera 404 e nenhum contato vazando para o banco.
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert(
+        {"name": "Loja Alheia Contacts Create", "slug": f"alheia-cc-{uuid.uuid4().hex[:8]}"}
+    ).execute().data[0]
+    try:
+        foreign_token, foreign_user_id = _create_user_and_sign_in(sb, foreign_tenant["id"], "gestor")
+        try:
+            response = client.post(
+                "/api/v1/contacts",
+                json={
+                    "name": "Contato Owner Alheio", "whatsapp": "+5511900004444",
+                    "origin": "outro", "owner_id": foreign_user_id,
+                },
+                headers=auth_headers(gestor_token),
+            )
+            assert response.status_code == 404
+
+            leaked = sb.table("contacts").select("id").eq("whatsapp", "+5511900004444").execute().data
+            assert leaked == []
+        finally:
+            sb.table("user_profiles").delete().eq("id", foreign_user_id).execute()
+            sb.auth.admin.delete_user(foreign_user_id)
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+
+
+def test_atualizar_contato_rejeita_owner_id_de_outro_tenant(client, gestor_token, gestor_user_id):
+    # Mesmo Important #2, mas via PATCH: update_contact não checava owner_id
+    # quando presente no patch. Cria um contato próprio e tenta reatribuí-lo
+    # a um owner_id de outro tenant — espera 404 e owner_id inalterado.
+    created = _create_contact(client, gestor_token, gestor_user_id, whatsapp="+5511900005555")
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert(
+        {"name": "Loja Alheia Contacts Update", "slug": f"alheia-cu-{uuid.uuid4().hex[:8]}"}
+    ).execute().data[0]
+    try:
+        foreign_token, foreign_user_id = _create_user_and_sign_in(sb, foreign_tenant["id"], "gestor")
+        try:
+            response = client.patch(
+                f"/api/v1/contacts/{created['id']}",
+                json={"owner_id": foreign_user_id},
+                headers=auth_headers(gestor_token),
+            )
+            assert response.status_code == 404
+
+            unchanged = sb.table("contacts").select("owner_id").eq("id", created["id"]).execute().data[0]
+            assert unchanged["owner_id"] == gestor_user_id
+        finally:
+            sb.table("user_profiles").delete().eq("id", foreign_user_id).execute()
+            sb.auth.admin.delete_user(foreign_user_id)
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+        _delete_contact(created["id"])
 
 
 def test_atualizar_contato_inexistente_404(client, gestor_token):

@@ -139,5 +139,7 @@ def mark_lost(tenant_id: str, deal_id: str, reason: str) -> dict:
 def update_financials(tenant_id: str, deal_id: str, supplier_product_id: str | None, supplier_value: float, gift_value: float) -> dict:
     sb = get_service_client()
     _get_deal(sb, tenant_id, deal_id)
+    if supplier_product_id is not None:
+        verify_owned_by_tenant("supplier_products", supplier_product_id, tenant_id, "Produto não encontrado.")
     patch = {"supplier_product_id": supplier_product_id, "supplier_value": supplier_value, "gift_value": gift_value}
     return sb.table("deals").update(patch).eq("id", deal_id).execute().data[0]
