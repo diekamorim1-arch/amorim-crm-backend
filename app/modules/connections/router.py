@@ -15,9 +15,9 @@ def list_all(user: AuthContext = Depends(get_current_user)):
 
 @router.post("/{connection_id}/pair", response_model=ConnectionOut)
 def pair(connection_id: str, user: AuthContext = Depends(get_current_user)):
-    return service.pair(user.tenant_id, connection_id)
+    return service.pair(user.tenant_id, connection_id, user.user_id, user.role)
 
 
 @router.post("/{connection_id}/disconnect", response_model=ConnectionOut)
 def disconnect(connection_id: str, user: AuthContext = Depends(get_current_user)):
-    return service.disconnect(user.tenant_id, connection_id)
+    return service.disconnect(user.tenant_id, connection_id, user.user_id, user.role)

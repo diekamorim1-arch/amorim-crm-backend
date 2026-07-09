@@ -66,6 +66,68 @@ def test_pair_e_disconnect_atualizam_status(client, gestor_token, gestor_user_id
         _cleanup_connections([connection["id"]])
 
 
+def test_atendente_pareia_e_desconecta_a_propria_conexao(client, atendente_token, atendente_user_id, test_tenant):
+    # Complementa test_pair_e_disconnect_atualizam_status (que só cobre
+    # gestor): confirma que um atendente consegue parear/desconectar a
+    # PRÓPRIA conexão, já que a checagem de posse em _assert_can_manage só
+    # bloqueia quando o dono da conexão é outro usuário.
+    sb = get_service_client()
+    connection = (
+        sb.table("connections")
+        .insert({"tenant_id": test_tenant["id"], "user_id": atendente_user_id, "phone": "+5511000000004"})
+        .execute()
+        .data[0]
+    )
+    try:
+        paired = client.post(f"/api/v1/connections/{connection['id']}/pair", headers=auth_headers(atendente_token))
+        assert paired.status_code == 200
+        assert paired.json()["status"] == "pareando"
+
+        disconnected = client.post(
+            f"/api/v1/connections/{connection['id']}/disconnect", headers=auth_headers(atendente_token)
+        )
+        assert disconnected.status_code == 200
+        assert disconnected.json()["status"] == "desconectado"
+    finally:
+        _cleanup_connections([connection["id"]])
+
+
+def test_atendente_nao_gerencia_conexao_de_outro_usuario(client, atendente_token, test_tenant):
+    """Correção pós-revisão: `_get_connection` só escopava por tenant_id, então
+    um atendente conseguia parear/desconectar a conexão de QUALQUER usuário do
+    mesmo tenant, não só a própria — violando o access model "atendente
+    (a própria), gestor (any)". Cria um segundo usuário real no mesmo tenant
+    com sua própria conexão e confirma que o primeiro atendente recebe 403 ao
+    tentar pair/disconnect nela."""
+    sb = get_service_client()
+    other_token, other_user_id = _create_user_and_sign_in(sb, test_tenant["id"], "atendente")
+    try:
+        other_connection = (
+            sb.table("connections")
+            .insert({"tenant_id": test_tenant["id"], "user_id": other_user_id, "phone": "+5511000000005"})
+            .execute()
+            .data[0]
+        )
+        try:
+            pair_response = client.post(
+                f"/api/v1/connections/{other_connection['id']}/pair", headers=auth_headers(atendente_token)
+            )
+            assert pair_response.status_code == 403
+
+            disconnect_response = client.post(
+                f"/api/v1/connections/{other_connection['id']}/disconnect", headers=auth_headers(atendente_token)
+            )
+            assert disconnect_response.status_code == 403
+
+            unchanged = sb.table("connections").select("status").eq("id", other_connection["id"]).execute().data[0]
+            assert unchanged["status"] == "desconectado"
+        finally:
+            sb.table("connections").delete().eq("id", other_connection["id"]).execute()
+    finally:
+        sb.table("user_profiles").delete().eq("id", other_user_id).execute()
+        sb.auth.admin.delete_user(other_user_id)
+
+
 def test_pair_rejeita_connection_id_de_outro_tenant(client, gestor_token):
     """`_get_connection` filtra por tenant_id antes de buscar pelo id
     (ver brief), então um connection_id de outro tenant já deveria resultar em
