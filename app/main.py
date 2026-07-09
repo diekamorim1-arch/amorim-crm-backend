@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.modules.activities.router import router as activities_router
 from app.modules.appointments.router import router as appointments_router
@@ -13,6 +14,11 @@ from app.modules.suppliers.router import router as suppliers_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
 from app.webhooks.evolution import router as evolution_webhook_router
+
+# Carrega e valida as settings já na importação do app: se EVOLUTION_WEBHOOK_SECRET
+# estiver vazio fora do ambiente de desenvolvimento, get_settings() levanta
+# ValueError aqui (falha ao subir o serviço) em vez de só na 1ª chamada ao webhook.
+get_settings()
 
 app = FastAPI(title="Amorim CRM API")
 register_exception_handlers(app)

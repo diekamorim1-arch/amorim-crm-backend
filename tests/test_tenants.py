@@ -24,6 +24,24 @@ def test_gestor_atualiza_o_proprio_tenant(client, gestor_token, test_tenant):
     assert response.json()["name"] == "Loja Renomeada"
 
 
+def test_gestor_nao_altera_plano_do_proprio_tenant(client, gestor_token, test_tenant):
+    # Gestor pode renomear a própria loja, mas plan é decisão do admin_saas
+    # (billing) — sem essa guarda, o gestor conseguiria se auto-promover de
+    # starter pra pro sem nenhum admin envolvido.
+    response = client.patch(
+        f"/api/v1/tenants/{test_tenant['id']}", json={"plan": "pro"}, headers=auth_headers(gestor_token)
+    )
+    assert response.status_code == 403
+
+
+def test_admin_altera_plano_de_um_tenant(client, admin_token, test_tenant):
+    response = client.patch(
+        f"/api/v1/tenants/{test_tenant['id']}", json={"plan": "pro"}, headers=auth_headers(admin_token)
+    )
+    assert response.status_code == 200
+    assert response.json()["plan"] == "pro"
+
+
 def test_gestor_nao_atualiza_outro_tenant(client, gestor_token):
     response = client.patch(
         "/api/v1/tenants/00000000-0000-0000-0000-000000000000",

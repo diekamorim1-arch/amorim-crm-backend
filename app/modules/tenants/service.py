@@ -46,6 +46,8 @@ def update_tenant(
 ) -> dict:
     if not is_admin and (requester_role != "gestor" or requester_tenant_id != tenant_id):
         raise AppError(403, "forbidden", "Você só pode editar a própria loja.")
+    if plan is not None and not is_admin:
+        raise AppError(403, "forbidden", "Apenas o admin da plataforma pode alterar o plano da loja.")
     patch = {k: v for k, v in {"name": name, "plan": plan}.items() if v is not None}
     if not patch:
         raise AppError(400, "empty_patch", "Nenhum campo para atualizar.")
