@@ -8,6 +8,7 @@ direto por id.
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -60,17 +61,66 @@ def test_contatos_nao_vazam_entre_tenants(client, gestor_token, other_gestor_tok
         get_service_client().table("contacts").delete().eq("id", created["id"]).execute()
 
 
-def test_dashboard_nao_mistura_dados_de_outro_tenant(client, gestor_token, other_gestor_token):
-    own = client.get("/api/v1/dashboard/metrics", headers=auth_headers(gestor_token)).json()
-    other = client.get("/api/v1/dashboard/metrics", headers=auth_headers(other_gestor_token)).json()
-    # other_tenant acabou de ser criado neste módulo e não tem nenhum deal, logo
-    # suas métricas devem refletir exatamente zero — provando que o cálculo do
-    # gestor do other_tenant não está agregando nada do test_tenant (que, sendo
-    # session-scoped e compartilhado, quase certamente tem dados != zero).
-    assert other["new_leads_month"] == 0
-    assert other["revenue_month"] == 0
-    assert other["in_negotiation_value"] == 0
-    assert own != other or (own["new_leads_month"] == 0 and other["new_leads_month"] == 0)
+def test_dashboard_nao_mistura_dados_de_outro_tenant(client, gestor_token, other_gestor_token, gestor_user_id, test_tenant):
+    # test_tenant é session-scoped e compartilhado por toda a suíte, e todo
+    # outro arquivo de teste limpa seus próprios dados em `finally` — então,
+    # dependendo da ordem de coleta do pytest, test_tenant pode estar
+    # zerado no momento em que este teste roda. Se comparássemos "own" (vazio)
+    # com "other" (vazio, tenant recém-criado), o teste passaria mesmo se o
+    # dashboard não filtrasse por tenant_id — dois estados vazios são
+    # indistinguíveis de "isolado". Por isso injetamos dado real e não-zero em
+    # test_tenant ANTES de comparar, e conferimos que:
+    #   1) as métricas do PRÓPRIO test_tenant de fato mudaram (prova que o
+    #      dado entrou no cálculo de alguém);
+    #   2) as métricas do other_tenant continuam exatamente zero (prova que
+    #      esse dado não vazou para o cálculo de outro tenant).
+    sb = get_service_client()
+    before = client.get("/api/v1/dashboard/metrics", headers=auth_headers(gestor_token)).json()
+
+    now = datetime.now(UTC).isoformat()
+    contact = (
+        sb.table("contacts")
+        .insert(
+            {
+                "tenant_id": test_tenant["id"], "name": "Contato Dashboard Isolamento", "whatsapp": "+5511700000004",
+                "origin": "instagram_organico", "owner_id": gestor_user_id,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+    deal = (
+        sb.table("deals")
+        .insert(
+            {
+                "tenant_id": test_tenant["id"], "contact_id": contact["id"], "owner_id": gestor_user_id,
+                "title": "Venda Isolamento Dashboard", "products": "iPhone", "value": 12345, "payment": "pix",
+                "stage": "pos_venda", "outcome": "ganho", "stage_changed_at": now,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+    try:
+        own = client.get("/api/v1/dashboard/metrics", headers=auth_headers(gestor_token)).json()
+        other = client.get("/api/v1/dashboard/metrics", headers=auth_headers(other_gestor_token)).json()
+
+        # 1) o deal ganho de 12345, com stage_changed_at agora, precisa ter
+        # entrado no revenue_month do PRÓPRIO tenant — provando que os dados
+        # inseridos realmente afetam algum cálculo (não é um teste vazio).
+        assert own["revenue_month"] == pytest.approx(before["revenue_month"] + 12345, abs=0.01)
+        assert own["new_leads_month"] >= before["new_leads_month"] + 1
+
+        # 2) nada disso pode aparecer nas métricas do other_tenant: ele
+        # acabou de ser criado neste módulo, sem nenhum contact/deal próprio,
+        # então devem continuar exatamente zero mesmo com test_tenant agora
+        # tendo dados reais e não-zero.
+        assert other["new_leads_month"] == 0
+        assert other["revenue_month"] == 0
+        assert other["in_negotiation_value"] == 0
+    finally:
+        sb.table("deals").delete().eq("id", deal["id"]).execute()
+        sb.table("contacts").delete().eq("id", contact["id"]).execute()
 
 
 def test_fornecedores_nao_vazam_entre_tenants(client, gestor_token, other_gestor_token, test_tenant):
