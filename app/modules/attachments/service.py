@@ -11,6 +11,13 @@ BUCKET = "attachments"
 # fonte de verdade agora que o arquivo passa a subir pro backend de verdade.
 MAX_FILE_BYTES = 1_500_000
 SIGNED_URL_TTL_SECONDS = 300
+# Comprovante de pagamento só faz sentido como imagem ou PDF — o accept="..."
+# do <input> no frontend é só UX (revisão de segurança pré-VPS, item 4): sem
+# essa checagem aqui, o Content-Type do multipart (controlado pelo cliente,
+# trivialmente falsificável) seria aceito e servido de volta como está.
+ALLOWED_CONTENT_TYPES = {
+    "image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf",
+}
 
 
 def _with_signed_url(sb, row: dict) -> dict:
@@ -38,6 +45,8 @@ def create_attachment(
 ) -> dict:
     if len(content) > MAX_FILE_BYTES:
         raise AppError(413, "file_too_large", "Arquivo maior que 1,5MB.")
+    if file_type not in ALLOWED_CONTENT_TYPES:
+        raise AppError(415, "unsupported_file_type", "Envie uma imagem (PNG/JPEG/WEBP/GIF) ou PDF.")
     sb = get_service_client()
     verify_owned_by_tenant("contacts", contact_id, tenant_id, "Cliente não encontrado.")
 

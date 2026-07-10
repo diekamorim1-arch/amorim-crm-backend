@@ -46,5 +46,7 @@ class ContactUpdate(BaseModel):
     email: str | None = None
     cpf: str | None = None
     address: Address | None = None
+    origin: str | None = None
+    interests: list[str] | None = None
     tags: list[str] | None = None
     owner_id: str | None = None

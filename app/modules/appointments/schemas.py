@@ -25,7 +25,11 @@ class AppointmentCreate(BaseModel):
 
 
 class AppointmentUpdate(BaseModel):
+    contact_id: str | None = None
+    deal_id: str | None = None
+    type: str | None = None
     starts_at: str | None = None
     ends_at: str | None = None
     status: str | None = None
+    owner_id: str | None = None
     note: str | None = None

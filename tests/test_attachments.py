@@ -106,6 +106,22 @@ def test_upload_rejeita_arquivo_maior_que_1_5mb(client, gestor_token, gestor_use
         _delete_contact(contact["id"])
 
 
+def test_upload_rejeita_tipo_de_arquivo_nao_permitido(client, gestor_token, gestor_user_id):
+    contact = _create_contact(client, gestor_token, gestor_user_id, whatsapp=f"+5511{uuid.uuid4().int % 10**9}")
+    try:
+        response = client.post(
+            f"/api/v1/contacts/{contact['id']}/attachments",
+            files={"file": ("script.js", b"alert(1)", "application/javascript")},
+            headers=auth_headers(gestor_token),
+        )
+        assert response.status_code == 415
+
+        sb = get_service_client()
+        assert sb.table("attachments").select("id").eq("contact_id", contact["id"]).execute().data == []
+    finally:
+        _delete_contact(contact["id"])
+
+
 def test_upload_rejeita_contact_id_de_outro_tenant(client, gestor_token):
     sb = get_service_client()
     foreign_tenant = sb.table("tenants").insert(

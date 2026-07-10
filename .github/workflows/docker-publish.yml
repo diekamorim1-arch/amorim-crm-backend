@@ -1,0 +1,39 @@
+name: Build e publica imagem Docker
+
+# Builda a partir do Dockerfile na raiz (uvicorn, usuario nao-root) e publica
+# no GitHub Container Registry a cada push na master (branch padrao deste
+# repo). Usa o GITHUB_TOKEN automático do próprio Actions
+# (permissions: packages: write) — nenhuma credencial manual precisa existir
+# em lugar nenhum pra isso funcionar.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}

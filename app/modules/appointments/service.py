@@ -34,6 +34,16 @@ def update_appointment(tenant_id: str, appointment_id: str, patch: dict) -> dict
     clean_patch = {k: v for k, v in patch.items() if v is not None}
     if not clean_patch:
         raise AppError(400, "empty_patch", "Nenhum campo para atualizar.")
+    # contact_id/deal_id/owner_id agora são editáveis (antes só starts_at/ends_at/
+    # status/note) — mesma checagem de tenant já aplicada em create_appointment,
+    # senão um usuário do tenant A poderia revincular o agendamento a um
+    # contato/negócio/responsável de outro tenant.
+    if "contact_id" in clean_patch:
+        verify_owned_by_tenant("contacts", clean_patch["contact_id"], tenant_id, "Cliente não encontrado.")
+    if "deal_id" in clean_patch:
+        verify_owned_by_tenant("deals", clean_patch["deal_id"], tenant_id, "Negócio não encontrado.")
+    if "owner_id" in clean_patch:
+        verify_owned_by_tenant("user_profiles", clean_patch["owner_id"], tenant_id, "Responsável não encontrado.")
     rows = (
         sb.table("appointments")
         .update(clean_patch)
