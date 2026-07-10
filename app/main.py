@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.core.errors import register_exception_handlers
@@ -22,6 +23,20 @@ from app.webhooks.evolution import router as evolution_webhook_router
 get_settings()
 
 app = FastAPI(title="Amorim CRM API")
+
+# Sem isso, todo fetch do frontend (app.amorimcrm.online, origem diferente da
+# API) falha no preflight OPTIONS com 405 antes mesmo de chegar numa rota —
+# achado ao vivo em produção (revisão de segurança pré-VPS já tinha CORS
+# restrito na Edge Function, mas este backend FastAPI nunca teve nenhum).
+# Allow-list explícita, igual ao Caddyfile/create-team-member — nunca "*".
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://app.amorimcrm.online", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 register_exception_handlers(app)
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(tenants_router, prefix="/api/v1")
