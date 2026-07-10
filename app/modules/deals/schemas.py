@@ -19,6 +19,7 @@ class DealOut(BaseModel):
     supplier_product_id: str | None = None
     supplier_value: float | None = None
     gift_value: float | None = None
+    freight_value: float | None = None
 
 
 class LeadCreate(BaseModel):
@@ -60,3 +61,4 @@ class DealFinancialsUpdate(BaseModel):
     supplier_product_id: str | None = None
     supplier_value: float
     gift_value: float
+    freight_value: float = 0

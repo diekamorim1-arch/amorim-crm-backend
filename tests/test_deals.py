@@ -173,6 +173,62 @@ def test_atendente_nao_edita_financeiro_mas_gestor_pode(client, atendente_token,
         _cleanup_lead(deal["contact_id"])
 
 
+def test_financials_grava_freight_value(client, gestor_token, gestor_user_id):
+    deal = _create_lead(client, gestor_token, gestor_user_id, whatsapp="+5511955551111")
+    try:
+        response = client.patch(
+            f"/api/v1/deals/{deal['id']}/financials",
+            json={"supplier_value": 3000, "gift_value": 100, "freight_value": 80},
+            headers=auth_headers(gestor_token),
+        )
+        assert response.status_code == 200
+        assert response.json()["freight_value"] == 80
+    finally:
+        _cleanup_lead(deal["contact_id"])
+
+
+def test_criar_lead_e_mudancas_de_deal_gravam_audit_log(client, gestor_token, gestor_user_id, test_tenant):
+    deal = _create_lead(client, gestor_token, gestor_user_id, whatsapp="+5511955552222")
+    try:
+        sb = get_service_client()
+        contact_insert = (
+            sb.table("audit_log")
+            .select("*")
+            .eq("table_name", "contacts")
+            .eq("record_id", deal["contact_id"])
+            .eq("action", "INSERT")
+            .execute()
+            .data
+        )
+        assert len(contact_insert) == 1
+        deal_insert = (
+            sb.table("audit_log")
+            .select("*")
+            .eq("table_name", "deals")
+            .eq("record_id", deal["id"])
+            .eq("action", "INSERT")
+            .execute()
+            .data
+        )
+        assert len(deal_insert) == 1
+        assert deal_insert[0]["user_id"] == gestor_user_id
+        assert deal_insert[0]["tenant_id"] == test_tenant["id"]
+
+        client.post(f"/api/v1/deals/{deal['id']}/mark-lost", json={"reason": "preco"}, headers=auth_headers(gestor_token))
+        mark_lost_logs = (
+            sb.table("audit_log")
+            .select("*")
+            .eq("table_name", "deals")
+            .eq("record_id", deal["id"])
+            .eq("action", "UPDATE")
+            .execute()
+            .data
+        )
+        assert len(mark_lost_logs) == 1
+    finally:
+        _cleanup_lead(deal["contact_id"])
+
+
 def test_atendente_tem_acesso_completo_ao_pipeline(client, atendente_token, atendente_user_id):
     # Access model do módulo (ver brief): atendente e gestor têm acesso igual
     # a todo o pipeline, exceto financials (gestor-only, coberto acima).

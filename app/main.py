@@ -4,6 +4,7 @@ from app.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.modules.activities.router import router as activities_router
 from app.modules.appointments.router import router as appointments_router
+from app.modules.attachments.router import router as attachments_router
 from app.modules.auth.router import router as auth_router
 from app.modules.connections.router import router as connections_router
 from app.modules.contacts.router import router as contacts_router
@@ -34,6 +35,7 @@ app.include_router(appointments_router, prefix="/api/v1")
 app.include_router(activities_router, prefix="/api/v1")
 app.include_router(connections_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
+app.include_router(attachments_router, prefix="/api/v1")
 
 
 @app.get("/health")

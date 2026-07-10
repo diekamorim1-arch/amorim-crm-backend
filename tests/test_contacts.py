@@ -190,6 +190,39 @@ def test_atualizar_contato_rejeita_owner_id_de_outro_tenant(client, gestor_token
         _delete_contact(created["id"])
 
 
+def test_criar_e_atualizar_contato_grava_audit_log(client, gestor_token, gestor_user_id, test_tenant):
+    created = _create_contact(client, gestor_token, gestor_user_id)
+    try:
+        sb = get_service_client()
+        insert_logs = (
+            sb.table("audit_log")
+            .select("*")
+            .eq("table_name", "contacts")
+            .eq("record_id", created["id"])
+            .eq("action", "INSERT")
+            .execute()
+            .data
+        )
+        assert len(insert_logs) == 1
+        assert insert_logs[0]["user_id"] == gestor_user_id
+        assert insert_logs[0]["tenant_id"] == test_tenant["id"]
+
+        client.patch(f"/api/v1/contacts/{created['id']}", json={"name": "Novo Nome"}, headers=auth_headers(gestor_token))
+        update_logs = (
+            sb.table("audit_log")
+            .select("*")
+            .eq("table_name", "contacts")
+            .eq("record_id", created["id"])
+            .eq("action", "UPDATE")
+            .execute()
+            .data
+        )
+        assert len(update_logs) == 1
+        assert update_logs[0]["user_id"] == gestor_user_id
+    finally:
+        _delete_contact(created["id"])
+
+
 def test_atualizar_contato_inexistente_404(client, gestor_token):
     response = client.patch(
         "/api/v1/contacts/00000000-0000-0000-0000-000000000000",

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from app.core.audit import log_audit_event
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
 from app.core.tenant_guard import verify_owned_by_tenant
@@ -36,7 +37,7 @@ def get_contact(tenant_id: str, contact_id: str) -> dict:
     return rows[0]
 
 
-def create_contact(tenant_id: str, data: dict) -> dict:
+def create_contact(tenant_id: str, user_id: str, data: dict) -> dict:
     sb = get_service_client()
     owner_id = data.get("owner_id")
     if owner_id is not None:
@@ -49,10 +50,12 @@ def create_contact(tenant_id: str, data: dict) -> dict:
         "first_contact_at": now,
         "last_interaction_at": now,
     }
-    return sb.table("contacts").insert(payload).execute().data[0]
+    contact = sb.table("contacts").insert(payload).execute().data[0]
+    log_audit_event(tenant_id, user_id, "INSERT", "contacts", contact["id"])
+    return contact
 
 
-def update_contact(tenant_id: str, contact_id: str, patch: dict) -> dict:
+def update_contact(tenant_id: str, user_id: str, contact_id: str, patch: dict) -> dict:
     sb = get_service_client()
     clean_patch = {k: v for k, v in patch.items() if v is not None}
     if not clean_patch:
@@ -69,4 +72,5 @@ def update_contact(tenant_id: str, contact_id: str, patch: dict) -> dict:
     )
     if not rows:
         raise AppError(404, "not_found", "Cliente não encontrado.")
+    log_audit_event(tenant_id, user_id, "UPDATE", "contacts", contact_id)
     return rows[0]

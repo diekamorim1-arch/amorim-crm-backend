@@ -28,18 +28,33 @@ def list_all(
 
 
 @router.post("/leads", response_model=DealOut)
-def create_lead(body: LeadCreate, tenant_id: str = Depends(require_tenant)):
-    return service.create_lead(tenant_id, body.name, body.whatsapp, body.origin, body.product_line, body.value, body.owner_id)
+def create_lead(
+    body: LeadCreate,
+    user: AuthContext = Depends(get_current_user),
+    tenant_id: str = Depends(require_tenant),
+):
+    return service.create_lead(
+        tenant_id, user.user_id, body.name, body.whatsapp, body.origin, body.product_line, body.value, body.owner_id
+    )
 
 
 @router.post("/deals", response_model=DealOut)
-def create(body: DealCreate, tenant_id: str = Depends(require_tenant)):
-    return service.create_deal(tenant_id, body.model_dump())
+def create(
+    body: DealCreate,
+    user: AuthContext = Depends(get_current_user),
+    tenant_id: str = Depends(require_tenant),
+):
+    return service.create_deal(tenant_id, user.user_id, body.model_dump())
 
 
 @router.patch("/deals/{deal_id}", response_model=DealOut)
-def update(deal_id: str, body: DealUpdate, tenant_id: str = Depends(require_tenant)):
-    return service.update_deal(tenant_id, deal_id, body.model_dump())
+def update(
+    deal_id: str,
+    body: DealUpdate,
+    user: AuthContext = Depends(get_current_user),
+    tenant_id: str = Depends(require_tenant),
+):
+    return service.update_deal(tenant_id, user.user_id, deal_id, body.model_dump())
 
 
 @router.post("/deals/{deal_id}/move", response_model=DealOut)
@@ -48,10 +63,18 @@ def move(deal_id: str, body: MoveDealBody, user: AuthContext = Depends(get_curre
 
 
 @router.post("/deals/{deal_id}/mark-lost", response_model=DealOut)
-def mark_lost(deal_id: str, body: MarkLostBody, tenant_id: str = Depends(require_tenant)):
-    return service.mark_lost(tenant_id, deal_id, body.reason)
+def mark_lost(
+    deal_id: str,
+    body: MarkLostBody,
+    user: AuthContext = Depends(get_current_user),
+    tenant_id: str = Depends(require_tenant),
+):
+    return service.mark_lost(tenant_id, user.user_id, deal_id, body.reason)
 
 
 @router.patch("/deals/{deal_id}/financials", response_model=DealOut)
 def update_financials(deal_id: str, body: DealFinancialsUpdate, user: AuthContext = Depends(require_role("gestor"))):
-    return service.update_financials(user.tenant_id, deal_id, body.supplier_product_id, body.supplier_value, body.gift_value)
+    return service.update_financials(
+        user.tenant_id, user.user_id, deal_id,
+        body.supplier_product_id, body.supplier_value, body.gift_value, body.freight_value,
+    )

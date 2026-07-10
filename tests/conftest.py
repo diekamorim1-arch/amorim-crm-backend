@@ -24,6 +24,11 @@ def test_tenant():
     # de teste (atendente/gestor) criados sob este tenant antes de apagá-lo,
     # senão o delete abaixo falha com violação de FK.
     sb.table("user_profiles").delete().eq("tenant_id", tenant["id"]).execute()
+    # audit_log.record_id não tem FK (log genérico, append-only) — não bloqueia
+    # a ordem de limpeza acima, mas ainda assim limpamos aqui pra manter o
+    # banco vazio ao final da suíte, já que create_contact/deals etc. (Parte 3)
+    # agora gravam auditoria a cada teste que passa por este tenant.
+    sb.table("audit_log").delete().eq("tenant_id", tenant["id"]).execute()
     sb.table("tenants").delete().eq("id", tenant["id"]).execute()
 
 
