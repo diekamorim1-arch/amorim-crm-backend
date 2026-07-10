@@ -18,11 +18,38 @@ def _verify_signature(body: bytes, signature: str) -> None:
         raise AppError(401, "invalid_signature", "Assinatura do webhook inválida.")
 
 
+# Evolution manda "state" em inglês (Baileys); mapeamos pro enum em
+# português já usado em connections.status. Estados sem correspondência
+# (ex.: "refused") são ignorados em vez de forçar um valor errado.
+_CONNECTION_STATE_MAP = {"open": "conectado", "connecting": "pareando", "close": "desconectado"}
+
+
+def _handle_connection_update(payload: dict) -> dict:
+    # connection_id é reaproveitado como instanceName da Evolution (mesma
+    # convenção de connections/service.py:pair) — o próprio nome da instância
+    # já É o id da linha em connections, sem tabela de mapeamento à parte.
+    connection_id = payload.get("instance")
+    state = (payload.get("data") or {}).get("state")
+    status = _CONNECTION_STATE_MAP.get(state)
+    if not connection_id or not status:
+        return {"status": "ignored"}
+
+    sb = get_service_client()
+    patch: dict = {"status": status}
+    if status == "conectado":
+        patch["connected_at"] = datetime.now(UTC).isoformat()
+    sb.table("connections").update(patch).eq("id", connection_id).execute()
+    return {"status": "processed"}
+
+
 @router.post("/evolution")
 async def receive_evolution_webhook(request: Request, x_evolution_signature: str = Header(default="")):
     raw_body = await request.body()
     _verify_signature(raw_body, x_evolution_signature)
     payload = await request.json()
+
+    if payload.get("event") == "connection.update":
+        return _handle_connection_update(payload)
 
     try:
         instance_phone = payload["instance"]["phone"]

@@ -13,6 +13,19 @@ def list_connections(tenant_id: str, user_id: str, role: str) -> list[dict]:
     return query.execute().data
 
 
+def create_connection(tenant_id: str, user_id: str, phone: str) -> dict:
+    # Auto-serviço: cada usuário cria só a própria conexão (o dono de um
+    # número de WhatsApp é sempre quem vai pareá-lo). Gestor gerenciar a
+    # conexão de outra pessoa (pair/disconnect) já é suportado; criar em nome
+    # de outro usuário não foi pedido, então não construímos isso agora.
+    sb = get_service_client()
+    existing = sb.table("connections").select("id").eq("tenant_id", tenant_id).eq("user_id", user_id).execute().data
+    if existing:
+        raise AppError(409, "already_exists", "Você já tem uma conexão de WhatsApp cadastrada.")
+    row = {"tenant_id": tenant_id, "user_id": user_id, "phone": phone, "status": "desconectado"}
+    return sb.table("connections").insert(row).execute().data[0]
+
+
 def _get_connection(sb, tenant_id: str, connection_id: str) -> dict:
     # connection_id não é uma referência externa vinda do body (como contact_id
     # em activities/appointments) — é o próprio recurso sendo buscado, e a
@@ -34,20 +47,51 @@ def _assert_can_manage(connection: dict, caller_user_id: str, caller_role: str) 
         raise AppError(403, "forbidden", "Você só pode gerenciar a própria conexão.")
 
 
+def _require_evolution_configured(settings) -> None:
+    if not settings.evolution_api_url:
+        raise AppError(503, "evolution_not_configured", "Evolution API não configurada neste ambiente.")
+
+
 def pair(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: str) -> dict:
     sb = get_service_client()
     connection = _get_connection(sb, tenant_id, connection_id)
     _assert_can_manage(connection, caller_user_id, caller_role)
     settings = get_settings()
     if settings.evolution_api_url:
+        # connection_id é reaproveitado como instanceName da Evolution — um
+        # único identificador em vez de manter dois em sincronia. O webhook
+        # que recebe eventos (mensagens e connection.update) é configurado
+        # globalmente pro container da Evolution (WEBHOOK_GLOBAL_URL), não
+        # por instância — cobre toda instância nova automaticamente.
         response = httpx.post(
             f"{settings.evolution_api_url}/instance/create",
             headers={"apikey": settings.evolution_api_key},
-            json={"instanceName": connection_id},
+            json={"instanceName": connection_id, "integration": "WHATSAPP-BAILEYS"},
             timeout=10,
         )
         response.raise_for_status()
     return sb.table("connections").update({"status": "pareando"}).eq("id", connection_id).execute().data[0]
+
+
+def get_qrcode(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: str) -> dict:
+    sb = get_service_client()
+    connection = _get_connection(sb, tenant_id, connection_id)
+    _assert_can_manage(connection, caller_user_id, caller_role)
+    settings = get_settings()
+    _require_evolution_configured(settings)
+
+    response = httpx.get(
+        f"{settings.evolution_api_url}/instance/connect/{connection_id}",
+        headers={"apikey": settings.evolution_api_key},
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    # A Evolution retorna o QR no campo "base64" (data URL pronta pra usar
+    # num <img src>) quando há um código pendente; sem QR pendente (ex.: já
+    # conectado, ou ainda inicializando) o campo pode vir ausente — devolvemos
+    # o status atual do banco pro front saber se deve parar de exibir/pollar.
+    return {"qrcode": data.get("base64"), "status": connection["status"]}
 
 
 def disconnect(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: str) -> dict:
@@ -62,3 +106,20 @@ def disconnect(tenant_id: str, connection_id: str, caller_user_id: str, caller_r
             timeout=10,
         )
     return sb.table("connections").update({"status": "desconectado"}).eq("id", connection_id).execute().data[0]
+
+
+def send_message(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: str, number: str, text: str) -> dict:
+    sb = get_service_client()
+    connection = _get_connection(sb, tenant_id, connection_id)
+    _assert_can_manage(connection, caller_user_id, caller_role)
+    settings = get_settings()
+    _require_evolution_configured(settings)
+
+    response = httpx.post(
+        f"{settings.evolution_api_url}/message/sendText/{connection_id}",
+        headers={"apikey": settings.evolution_api_key},
+        json={"number": number, "text": text},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return {"status": "sent"}

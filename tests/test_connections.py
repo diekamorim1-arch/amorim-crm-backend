@@ -128,6 +128,76 @@ def test_atendente_nao_gerencia_conexao_de_outro_usuario(client, atendente_token
         sb.auth.admin.delete_user(other_user_id)
 
 
+def test_cria_a_propria_conexao(client, gestor_token, gestor_user_id, test_tenant):
+    response = client.post(
+        "/api/v1/connections", json={"phone": "+5511000000006"}, headers=auth_headers(gestor_token)
+    )
+    try:
+        assert response.status_code == 200
+        body = response.json()
+        assert body["user_id"] == gestor_user_id
+        assert body["phone"] == "+5511000000006"
+        assert body["status"] == "desconectado"
+    finally:
+        _cleanup_connections([response.json()["id"]] if response.status_code == 200 else [])
+
+
+def test_nao_cria_segunda_conexao_pro_mesmo_usuario(client, gestor_token, gestor_user_id, test_tenant):
+    sb = get_service_client()
+    existing = (
+        sb.table("connections")
+        .insert({"tenant_id": test_tenant["id"], "user_id": gestor_user_id, "phone": "+5511000000007"})
+        .execute()
+        .data[0]
+    )
+    try:
+        response = client.post(
+            "/api/v1/connections", json={"phone": "+5511000000008"}, headers=auth_headers(gestor_token)
+        )
+        assert response.status_code == 409
+    finally:
+        _cleanup_connections([existing["id"]])
+
+
+def test_qrcode_retorna_503_quando_evolution_nao_configurada(client, gestor_token, gestor_user_id, test_tenant):
+    # Este ambiente de teste roda com EVOLUTION_API_URL vazio (mesmo padrão
+    # de test_pair_e_disconnect_atualizam_status) — get_qrcode não tem um
+    # caminho no-op como pair/disconnect porque não existe QR nenhum pra
+    # devolver sem a Evolution de verdade, então o correto aqui é 503, não
+    # um 200 com dado inventado.
+    sb = get_service_client()
+    connection = (
+        sb.table("connections")
+        .insert({"tenant_id": test_tenant["id"], "user_id": gestor_user_id, "phone": "+5511000000012"})
+        .execute()
+        .data[0]
+    )
+    try:
+        response = client.get(f"/api/v1/connections/{connection['id']}/qrcode", headers=auth_headers(gestor_token))
+        assert response.status_code == 503
+    finally:
+        _cleanup_connections([connection["id"]])
+
+
+def test_send_message_retorna_503_quando_evolution_nao_configurada(client, gestor_token, gestor_user_id, test_tenant):
+    sb = get_service_client()
+    connection = (
+        sb.table("connections")
+        .insert({"tenant_id": test_tenant["id"], "user_id": gestor_user_id, "phone": "+5511000000013"})
+        .execute()
+        .data[0]
+    )
+    try:
+        response = client.post(
+            f"/api/v1/connections/{connection['id']}/messages",
+            json={"number": "+5511988887777", "text": "oi"},
+            headers=auth_headers(gestor_token),
+        )
+        assert response.status_code == 503
+    finally:
+        _cleanup_connections([connection["id"]])
+
+
 def test_pair_rejeita_connection_id_de_outro_tenant(client, gestor_token):
     """`_get_connection` filtra por tenant_id antes de buscar pelo id
     (ver brief), então um connection_id de outro tenant já deveria resultar em
