@@ -235,3 +235,34 @@ def test_nao_cria_agendamento_referenciando_deal_de_outro_tenant(client, gestor_
     finally:
         sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
         _cleanup(contact_ids=[contact["id"]])
+
+
+def test_admin_impersonando_cria_agendamento_como_proprio_responsavel(
+    client, admin_token, admin_user_id, gestor_token, gestor_user_id, test_tenant
+):
+    """Mesma exceção de deals/contacts (verify_owner_or_self) — cobre o
+    router de appointments, que antes desta leva nem sequer injetava
+    AuthContext (só tenant_id), então is_impersonating precisou ser
+    adicionado do zero aqui."""
+    contact = client.post(
+        "/api/v1/contacts",
+        json={"name": "Contato Admin", "whatsapp": "+5511800000099", "origin": "outro", "owner_id": gestor_user_id},
+        headers=auth_headers(gestor_token),
+    ).json()
+    try:
+        headers = {**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]}
+        created = client.post(
+            "/api/v1/appointments",
+            json={
+                "contact_id": contact["id"], "type": "entrega", "starts_at": "2026-08-05T10:00:00Z",
+                "ends_at": "2026-08-05T10:30:00Z", "owner_id": admin_user_id,
+            },
+            headers=headers,
+        )
+        assert created.status_code == 200
+        assert created.json()["owner_id"] == admin_user_id
+    finally:
+        _cleanup(
+            contact_ids=[contact["id"]],
+            appointment_ids=[created.json()["id"]] if created.status_code == 200 else [],
+        )

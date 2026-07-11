@@ -28,6 +28,7 @@ async def get_current_user(
             tenant_id=x_impersonate_tenant,
             role="gestor",
             email=context.email,
+            is_impersonating=True,
         )
 
     return context

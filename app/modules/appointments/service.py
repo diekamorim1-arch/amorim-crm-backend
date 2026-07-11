@@ -1,6 +1,6 @@
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
-from app.core.tenant_guard import verify_owned_by_tenant
+from app.core.tenant_guard import verify_owned_by_tenant, verify_owner_or_self
 
 
 def list_appointments(tenant_id: str, date_from: str | None, date_to: str | None, contact_id: str | None) -> list[dict]:
@@ -15,7 +15,7 @@ def list_appointments(tenant_id: str, date_from: str | None, date_to: str | None
     return query.order("starts_at").execute().data
 
 
-def create_appointment(tenant_id: str, data: dict) -> dict:
+def create_appointment(tenant_id: str, data: dict, caller_user_id: str = "", is_impersonating: bool = False) -> dict:
     sb = get_service_client()
     # Mesma vulnerabilidade recorrente das Tasks 6/7/8: contact_id, deal_id e
     # owner_id vêm direto do body do cliente. Sem estas checagens, um usuário
@@ -25,11 +25,13 @@ def create_appointment(tenant_id: str, data: dict) -> dict:
     verify_owned_by_tenant("contacts", data["contact_id"], tenant_id, "Cliente não encontrado.")
     if data.get("deal_id") is not None:
         verify_owned_by_tenant("deals", data["deal_id"], tenant_id, "Negócio não encontrado.")
-    verify_owned_by_tenant("user_profiles", data["owner_id"], tenant_id, "Responsável não encontrado.")
+    verify_owner_or_self(data["owner_id"], tenant_id, caller_user_id, is_impersonating, "Responsável não encontrado.")
     return sb.table("appointments").insert({**data, "tenant_id": tenant_id}).execute().data[0]
 
 
-def update_appointment(tenant_id: str, appointment_id: str, patch: dict) -> dict:
+def update_appointment(
+    tenant_id: str, appointment_id: str, patch: dict, caller_user_id: str = "", is_impersonating: bool = False
+) -> dict:
     sb = get_service_client()
     clean_patch = {k: v for k, v in patch.items() if v is not None}
     if not clean_patch:
@@ -43,7 +45,9 @@ def update_appointment(tenant_id: str, appointment_id: str, patch: dict) -> dict
     if "deal_id" in clean_patch:
         verify_owned_by_tenant("deals", clean_patch["deal_id"], tenant_id, "Negócio não encontrado.")
     if "owner_id" in clean_patch:
-        verify_owned_by_tenant("user_profiles", clean_patch["owner_id"], tenant_id, "Responsável não encontrado.")
+        verify_owner_or_self(
+            clean_patch["owner_id"], tenant_id, caller_user_id, is_impersonating, "Responsável não encontrado."
+        )
     rows = (
         sb.table("appointments")
         .update(clean_patch)

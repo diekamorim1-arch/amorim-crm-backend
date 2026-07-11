@@ -34,7 +34,8 @@ def create_lead(
     tenant_id: str = Depends(require_tenant),
 ):
     return service.create_lead(
-        tenant_id, user.user_id, body.name, body.whatsapp, body.origin, body.product_line, body.value, body.owner_id
+        tenant_id, user.user_id, body.name, body.whatsapp, body.origin, body.product_line, body.value,
+        body.owner_id, user.is_impersonating,
     )
 
 
@@ -44,7 +45,7 @@ def create(
     user: AuthContext = Depends(get_current_user),
     tenant_id: str = Depends(require_tenant),
 ):
-    return service.create_deal(tenant_id, user.user_id, body.model_dump())
+    return service.create_deal(tenant_id, user.user_id, body.model_dump(), user.is_impersonating)
 
 
 @router.patch("/deals/{deal_id}", response_model=DealOut)

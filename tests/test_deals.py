@@ -389,3 +389,42 @@ def test_nao_cria_lead_ou_deal_referenciando_recursos_de_outro_tenant(client, ge
             sb.auth.admin.delete_user(foreign_user_id)
     finally:
         sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+
+
+def test_admin_impersonando_cria_lead_como_proprio_responsavel(client, admin_token, admin_user_id, test_tenant):
+    """admin_saas não tem linha em user_profiles vinculada a este tenant (o
+    perfil dele tem tenant_id null) — verify_owned_by_tenant sempre rejeitaria
+    ele como responsável. verify_owner_or_self abre exceção só quando o
+    owner_id é o próprio chamador impersonando (ver app/core/tenant_guard.py).
+    """
+    headers = {**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]}
+    response = client.post(
+        "/api/v1/leads",
+        json={
+            "name": "Lead Admin", "whatsapp": "+5511988880099", "origin": "instagram_organico",
+            "value": 1000, "owner_id": admin_user_id,
+        },
+        headers=headers,
+    )
+    try:
+        assert response.status_code == 200
+        assert response.json()["owner_id"] == admin_user_id
+    finally:
+        if response.status_code == 200:
+            _cleanup_lead(response.json()["contact_id"])
+
+
+def test_admin_impersonando_nao_atribui_lead_a_outro_usuario_arbitrario(client, admin_token, test_tenant):
+    """A exceção de verify_owner_or_self só vale quando owner_id === o próprio
+    chamador — um id qualquer (nem do time do tenant, nem o próprio admin)
+    continua caindo no 404 normal, mesmo durante impersonação."""
+    headers = {**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]}
+    response = client.post(
+        "/api/v1/leads",
+        json={
+            "name": "Lead Alheio", "whatsapp": "+5511988880098", "origin": "instagram_organico",
+            "value": 1000, "owner_id": "00000000-0000-0000-0000-000000000000",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 404

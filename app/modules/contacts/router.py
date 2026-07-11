@@ -31,7 +31,7 @@ def create(
     user: AuthContext = Depends(get_current_user),
     tenant_id: str = Depends(require_tenant),
 ):
-    return service.create_contact(tenant_id, user.user_id, body.model_dump())
+    return service.create_contact(tenant_id, user.user_id, body.model_dump(), user.is_impersonating)
 
 
 @router.patch("/{contact_id}", response_model=ContactOut)
@@ -41,4 +41,4 @@ def update(
     user: AuthContext = Depends(get_current_user),
     tenant_id: str = Depends(require_tenant),
 ):
-    return service.update_contact(tenant_id, user.user_id, contact_id, body.model_dump())
+    return service.update_contact(tenant_id, user.user_id, contact_id, body.model_dump(), user.is_impersonating)

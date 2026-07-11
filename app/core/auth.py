@@ -10,6 +10,7 @@ class AuthContext:
     tenant_id: str | None
     role: str
     email: str
+    is_impersonating: bool = False
 
 
 def extract_claims(payload: dict) -> AuthContext:

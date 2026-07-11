@@ -39,5 +39,10 @@ def send_message(conversation_id: str, body: MessageCreate, user: AuthContext = 
 
 
 @router.patch("/{conversation_id}/assignee", response_model=ConversationOut)
-def update_assignee(conversation_id: str, body: AssigneeUpdate, tenant_id: str = Depends(require_tenant)):
-    return service.update_assignee(tenant_id, conversation_id, body.assignee_id)
+def update_assignee(
+    conversation_id: str,
+    body: AssigneeUpdate,
+    user: AuthContext = Depends(get_current_user),
+    tenant_id: str = Depends(require_tenant),
+):
+    return service.update_assignee(tenant_id, conversation_id, body.assignee_id, user.user_id, user.is_impersonating)

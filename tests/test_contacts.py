@@ -238,3 +238,21 @@ def test_buscar_contato_inexistente_404(client, gestor_token):
         headers=auth_headers(gestor_token),
     )
     assert response.status_code == 404
+
+
+def test_admin_impersonando_cria_contato_como_proprio_responsavel(client, admin_token, admin_user_id, test_tenant):
+    """Mesma exceção de deals (verify_owner_or_self): admin_saas não tem linha
+    em user_profiles vinculada a este tenant, mas pode se atribuir contatos
+    como responsável enquanto está impersonando a loja."""
+    headers = {**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]}
+    response = client.post(
+        "/api/v1/contacts",
+        json={"name": "Cliente Admin", "whatsapp": "+5511999990099", "origin": "whatsapp_direto", "owner_id": admin_user_id},
+        headers=headers,
+    )
+    try:
+        assert response.status_code == 200
+        assert response.json()["owner_id"] == admin_user_id
+    finally:
+        if response.status_code == 200:
+            _delete_contact(response.json()["id"])

@@ -87,6 +87,34 @@ def test_atribuir_conversa(client, gestor_token, gestor_user_id):
         sb.table("contacts").delete().eq("id", contact["id"]).execute()
 
 
+def test_admin_impersonando_se_atribui_a_propria_conversa(
+    client, admin_token, admin_user_id, gestor_token, gestor_user_id, test_tenant
+):
+    """Mesma exceção de deals/contacts/appointments (verify_owner_or_self)
+    aplicada a assignee_id."""
+    sb = get_service_client()
+    contact = client.post(
+        "/api/v1/contacts",
+        json={"name": "Contato Atribuicao Admin", "whatsapp": "+5511900000099", "origin": "outro", "owner_id": gestor_user_id},
+        headers=auth_headers(gestor_token),
+    ).json()
+
+    try:
+        conversation = client.post(
+            "/api/v1/conversations", json={"contact_id": contact["id"]}, headers=auth_headers(gestor_token)
+        ).json()
+
+        headers = {**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]}
+        updated = client.patch(
+            f"/api/v1/conversations/{conversation['id']}/assignee", json={"assignee_id": admin_user_id}, headers=headers
+        )
+        assert updated.status_code == 200
+        assert updated.json()["assignee_id"] == admin_user_id
+    finally:
+        sb.table("conversations").delete().eq("id", conversation["id"]).execute()
+        sb.table("contacts").delete().eq("id", contact["id"]).execute()
+
+
 def test_criar_conversa_rejeita_contato_de_outro_tenant(client, gestor_token):
     """Guarda de tenant (mesma classe de vulnerabilidade corrigida nas Tasks 6 e 7):
     contact_id de um tenant diferente não pode ser usado para criar uma conversa

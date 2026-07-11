@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from app.core.audit import log_audit_event
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
-from app.core.tenant_guard import verify_owned_by_tenant
+from app.core.tenant_guard import verify_owner_or_self
 
 
 def list_contacts(
@@ -37,11 +37,11 @@ def get_contact(tenant_id: str, contact_id: str) -> dict:
     return rows[0]
 
 
-def create_contact(tenant_id: str, user_id: str, data: dict) -> dict:
+def create_contact(tenant_id: str, user_id: str, data: dict, is_impersonating: bool = False) -> dict:
     sb = get_service_client()
     owner_id = data.get("owner_id")
     if owner_id is not None:
-        verify_owned_by_tenant("user_profiles", owner_id, tenant_id, "Responsável não encontrado.")
+        verify_owner_or_self(owner_id, tenant_id, user_id, is_impersonating, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     payload = {
         **data,
@@ -55,13 +55,13 @@ def create_contact(tenant_id: str, user_id: str, data: dict) -> dict:
     return contact
 
 
-def update_contact(tenant_id: str, user_id: str, contact_id: str, patch: dict) -> dict:
+def update_contact(tenant_id: str, user_id: str, contact_id: str, patch: dict, is_impersonating: bool = False) -> dict:
     sb = get_service_client()
     clean_patch = {k: v for k, v in patch.items() if v is not None}
     if not clean_patch:
         raise AppError(400, "empty_patch", "Nenhum campo para atualizar.")
     if "owner_id" in clean_patch:
-        verify_owned_by_tenant("user_profiles", clean_patch["owner_id"], tenant_id, "Responsável não encontrado.")
+        verify_owner_or_self(clean_patch["owner_id"], tenant_id, user_id, is_impersonating, "Responsável não encontrado.")
     rows = (
         sb.table("contacts")
         .update(clean_patch)

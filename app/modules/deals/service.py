@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from app.core.audit import log_audit_event
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
-from app.core.tenant_guard import verify_owned_by_tenant
+from app.core.tenant_guard import verify_owned_by_tenant, verify_owner_or_self
 
 PRODUCT_LINE_LABELS = {
     "iphone": "iPhone", "ipad": "iPad", "mac": "Mac", "watch": "Apple Watch",
@@ -27,10 +27,10 @@ def list_deals(tenant_id: str, stage: str | None, outcome: str | None, owner_id:
 
 def create_lead(
     tenant_id: str, actor_user_id: str, name: str, whatsapp: str, origin: str,
-    product_line: str | None, value: float, owner_id: str,
+    product_line: str | None, value: float, owner_id: str, is_impersonating: bool = False,
 ) -> dict:
     sb = get_service_client()
-    verify_owned_by_tenant("user_profiles", owner_id, tenant_id, "Responsável não encontrado.")
+    verify_owner_or_self(owner_id, tenant_id, actor_user_id, is_impersonating, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     product_label = PRODUCT_LINE_LABELS.get(product_line, "Novo negócio")
 
@@ -71,10 +71,10 @@ def create_lead(
     return deal
 
 
-def create_deal(tenant_id: str, actor_user_id: str, data: dict) -> dict:
+def create_deal(tenant_id: str, actor_user_id: str, data: dict, is_impersonating: bool = False) -> dict:
     sb = get_service_client()
     verify_owned_by_tenant("contacts", data["contact_id"], tenant_id, "Cliente não encontrado.")
-    verify_owned_by_tenant("user_profiles", data["owner_id"], tenant_id, "Responsável não encontrado.")
+    verify_owner_or_self(data["owner_id"], tenant_id, actor_user_id, is_impersonating, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     payload = {**data, "tenant_id": tenant_id, "stage": "novo_lead", "outcome": "aberto", "stage_changed_at": now}
     deal = sb.table("deals").insert(payload).execute().data[0]

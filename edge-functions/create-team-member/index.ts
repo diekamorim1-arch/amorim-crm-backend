@@ -73,15 +73,38 @@ Deno.serve(async (req: Request) => {
 
   const callerRole = callerData.user.app_metadata?.role;
   const callerTenantId = callerData.user.app_metadata?.tenant_id;
-  if (callerRole !== "gestor" || !callerTenantId) {
-    return jsonResponse(req, { error: "Só gestores podem convidar membros da equipe." }, 403);
-  }
 
-  let body: { name?: string; email?: string; role?: string };
+  let body: { name?: string; email?: string; role?: string; tenant_id?: string };
   try {
     body = await req.json();
   } catch {
     return jsonResponse(req, { error: "Corpo da requisição inválido." }, 400);
+  }
+
+  // Client de service role — bypassa RLS, só existe dentro desta function.
+  const adminClient = createClient(supabaseUrl, serviceRoleKey);
+
+  // Um gestor convida sempre pro próprio tenant (do JWT). admin_saas nunca
+  // tem tenant_id no próprio JWT (não pertence a loja nenhuma) — diferente
+  // do backend FastAPI, que já resolve impersonação via header
+  // X-Impersonate-Tenant (app/deps.py), esta function ainda lê o papel
+  // direto do JWT real, que não muda durante "Entrar como gestor". Por isso
+  // o frontend manda o tenant impersonado explícito no corpo quando quem
+  // chama é admin_saas, e aqui validamos que corresponde a uma loja de
+  // verdade antes de convidar nela — sem essa validação, um admin_saas
+  // poderia convidar gente pra qualquer tenant_id arbitrário só mandando no
+  // corpo da requisição.
+  let targetTenantId: string;
+  if (callerRole === "gestor" && callerTenantId) {
+    targetTenantId = callerTenantId;
+  } else if (callerRole === "admin_saas" && body.tenant_id) {
+    const { data: tenant } = await adminClient.from("tenants").select("id").eq("id", body.tenant_id).maybeSingle();
+    if (!tenant) {
+      return jsonResponse(req, { error: "Loja não encontrada." }, 404);
+    }
+    targetTenantId = tenant.id;
+  } else {
+    return jsonResponse(req, { error: "Só gestores podem convidar membros da equipe." }, 403);
   }
 
   const name = body.name?.trim();
@@ -90,9 +113,6 @@ Deno.serve(async (req: Request) => {
   if (!name || !email || !role || !ASSIGNABLE_ROLES.includes(role)) {
     return jsonResponse(req, { error: "Informe nome, e-mail e um papel válido (atendente ou gestor)." }, 400);
   }
-
-  // Client de service role — bypassa RLS, só existe dentro desta function.
-  const adminClient = createClient(supabaseUrl, serviceRoleKey);
 
   const { data: invited, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(email, {
     data: { name },
@@ -105,7 +125,7 @@ Deno.serve(async (req: Request) => {
   // passo pra estampar tenant_id/role no JWT (mesmos claims que
   // current_tenant_id()/current_role() leem nas policies de RLS).
   const { error: metadataError } = await adminClient.auth.admin.updateUserById(invited.user.id, {
-    app_metadata: { tenant_id: callerTenantId, role },
+    app_metadata: { tenant_id: targetTenantId, role },
   });
   if (metadataError) {
     return jsonResponse(req, { error: metadataError.message }, 500);
@@ -114,7 +134,7 @@ Deno.serve(async (req: Request) => {
   const avatarColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
   const { error: profileError } = await adminClient.from("user_profiles").insert({
     id: invited.user.id,
-    tenant_id: callerTenantId,
+    tenant_id: targetTenantId,
     role,
     name,
     avatar_color: avatarColor,
@@ -129,7 +149,7 @@ Deno.serve(async (req: Request) => {
   // segurança pré-VPS, item 7). Falha aqui não desfaz o convite já enviado —
   // só loga, pra não deixar o gestor sem saber que o convite funcionou.
   const { error: auditError } = await adminClient.from("audit_log").insert({
-    tenant_id: callerTenantId,
+    tenant_id: targetTenantId,
     user_id: callerData.user.id,
     action: "INSERT",
     table_name: "user_profiles",
@@ -143,7 +163,7 @@ Deno.serve(async (req: Request) => {
     req,
     {
       id: invited.user.id,
-      tenantId: callerTenantId,
+      tenantId: targetTenantId,
       name,
       email,
       role,

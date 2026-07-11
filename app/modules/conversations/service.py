@@ -5,7 +5,7 @@ import httpx
 from app.config import get_settings
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
-from app.core.tenant_guard import verify_owned_by_tenant
+from app.core.tenant_guard import verify_owned_by_tenant, verify_owner_or_self
 
 
 def list_conversations(tenant_id: str, assignee_id: str | None, status: str | None) -> list[dict]:
@@ -86,14 +86,18 @@ def send_message(tenant_id: str, conversation_id: str, text: str, author_id: str
     return message
 
 
-def update_assignee(tenant_id: str, conversation_id: str, assignee_id: str | None) -> dict:
+def update_assignee(
+    tenant_id: str, conversation_id: str, assignee_id: str | None, caller_user_id: str = "", is_impersonating: bool = False
+) -> dict:
     sb = get_service_client()
     # assignee_id é outra referência a um recurso escopado por tenant
     # (user_profiles) vinda direto do body do cliente — mesma disciplina de
     # verify_owned_by_tenant aplicada a owner_id em deals (Task 6) e a
     # supplier_id em suppliers (Task 7). None (desatribuir) não precisa checagem.
     if assignee_id is not None:
-        verify_owned_by_tenant("user_profiles", assignee_id, tenant_id, "Usuário responsável não encontrado.")
+        verify_owner_or_self(
+            assignee_id, tenant_id, caller_user_id, is_impersonating, "Usuário responsável não encontrado."
+        )
     rows = (
         sb.table("conversations")
         .update({"assignee_id": assignee_id})
