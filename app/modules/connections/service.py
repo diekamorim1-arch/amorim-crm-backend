@@ -57,12 +57,10 @@ def pair(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: s
     connection = _get_connection(sb, tenant_id, connection_id)
     _assert_can_manage(connection, caller_user_id, caller_role)
     settings = get_settings()
+    patch: dict = {"status": "pareando"}
     if settings.evolution_api_url:
         # connection_id é reaproveitado como instanceName da Evolution — um
-        # único identificador em vez de manter dois em sincronia. O webhook
-        # que recebe eventos (mensagens e connection.update) é configurado
-        # globalmente pro container da Evolution (WEBHOOK_GLOBAL_URL), não
-        # por instância — cobre toda instância nova automaticamente.
+        # único identificador em vez de manter dois em sincronia.
         response = httpx.post(
             f"{settings.evolution_api_url}/instance/create",
             headers={"apikey": settings.evolution_api_key},
@@ -70,7 +68,31 @@ def pair(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: s
             timeout=10,
         )
         response.raise_for_status()
-    return sb.table("connections").update({"status": "pareando"}).eq("id", connection_id).execute().data[0]
+        # "hash" é o token único dessa instância — a Evolution não assina o
+        # corpo dos webhooks (sem HMAC nesta versão), mas ecoa esse mesmo
+        # valor no campo "apikey" de todo evento; salvar aqui é o que deixa
+        # app/webhooks/evolution.py provar que um evento veio da instância
+        # certa (confirmado testando contra a Evolution real).
+        patch["evolution_token"] = response.json()["hash"]
+
+        if settings.evolution_webhook_url:
+            # WEBHOOK_GLOBAL_* nas env vars do container não anexa webhook a
+            # uma instância nova nesta versão (confirmado testando ao vivo)
+            # — precisa desse passo explícito por instância.
+            httpx.post(
+                f"{settings.evolution_api_url}/webhook/set/{connection_id}",
+                headers={"apikey": settings.evolution_api_key},
+                json={
+                    "webhook": {
+                        "enabled": True,
+                        "url": settings.evolution_webhook_url,
+                        "webhookByEvents": False,
+                        "events": ["CONNECTION_UPDATE", "MESSAGES_UPSERT"],
+                    }
+                },
+                timeout=10,
+            )
+    return sb.table("connections").update(patch).eq("id", connection_id).execute().data[0]
 
 
 def get_qrcode(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: str) -> dict:

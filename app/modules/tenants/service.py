@@ -17,6 +17,14 @@ def list_tenants() -> list[dict]:
     return sb.table("tenants").select("*").execute().data
 
 
+def get_tenant(tenant_id: str) -> dict:
+    sb = get_service_client()
+    rows = sb.table("tenants").select("*").eq("id", tenant_id).execute().data
+    if not rows:
+        raise AppError(404, "not_found", "Loja não encontrada.")
+    return rows[0]
+
+
 def create_tenant(name: str, plan: str) -> dict:
     sb = get_service_client()
     tenant = sb.table("tenants").insert({"name": name, "slug": _slugify(name), "plan": plan}).execute().data[0]
@@ -68,7 +76,24 @@ def update_tenant_settings(tenant_id: str, requester_tenant_id: str, patch: dict
 
 def check_tenant_for_impersonation(tenant_id: str) -> dict:
     sb = get_service_client()
-    rows = sb.table("tenants").select("id, name").eq("id", tenant_id).execute().data
+    rows = sb.table("tenants").select("id, name, status").eq("id", tenant_id).execute().data
+    if not rows:
+        raise AppError(404, "not_found", "Loja não encontrada.")
+    # Lojas suspensas não são bloqueadas aqui: suspender é uma ação do próprio
+    # admin_saas, que precisa poder entrar na loja pra investigar/resolver o
+    # que motivou a suspensão.
+    return rows[0]
+
+
+def update_billing(tenant_id: str, billing_status: str, plan_expires_at: str | None) -> dict:
+    sb = get_service_client()
+    rows = (
+        sb.table("tenants")
+        .update({"billing_status": billing_status, "plan_expires_at": plan_expires_at})
+        .eq("id", tenant_id)
+        .execute()
+        .data
+    )
     if not rows:
         raise AppError(404, "not_found", "Loja não encontrada.")
     return rows[0]

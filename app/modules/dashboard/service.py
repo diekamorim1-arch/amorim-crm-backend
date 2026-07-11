@@ -4,6 +4,10 @@ from datetime import UTC, datetime
 from app.core.supabase_client import get_service_client
 
 STAGES = ["novo_lead", "em_atendimento", "negociacao", "fechamento", "pos_venda"]
+MONTH_NAMES_PT = [
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+]
 
 
 def _month_bounds(reference: datetime) -> tuple[str, str]:
@@ -17,6 +21,22 @@ def _prev_month_reference(reference: datetime) -> datetime:
     if reference.month == 1:
         return reference.replace(year=reference.year - 1, month=12)
     return reference.replace(month=reference.month - 1)
+
+
+def _deal_net_profit(deal: dict) -> float:
+    return (
+        deal["value"]
+        - (deal.get("supplier_value") or 0)
+        - (deal.get("gift_value") or 0)
+        - (deal.get("freight_value") or 0)
+    )
+
+
+def _add_months(reference: datetime, delta: int) -> datetime:
+    month_index = reference.month - 1 + delta
+    year = reference.year + month_index // 12
+    month = month_index % 12 + 1
+    return reference.replace(year=year, month=month)
 
 
 def get_metrics(tenant_id: str) -> dict:
@@ -38,9 +58,7 @@ def get_metrics(tenant_id: str) -> dict:
     revenue_month = sum(d["value"] for d in won_deals if month_start <= d["stage_changed_at"] <= month_end)
     revenue_prev_month = sum(d["value"] for d in won_deals if prev_start <= d["stage_changed_at"] <= prev_end)
     net_profit_month = sum(
-        d["value"] - (d.get("supplier_value") or 0) - (d.get("gift_value") or 0)
-        for d in won_deals
-        if month_start <= d["stage_changed_at"] <= month_end
+        _deal_net_profit(d) for d in won_deals if month_start <= d["stage_changed_at"] <= month_end
     )
 
     lost_count = sum(1 for d in deals if d["outcome"] == "perdido")
@@ -82,3 +100,76 @@ def get_metrics(tenant_id: str) -> dict:
         "by_channel": by_channel,
         "loss_ranking": loss_ranking,
     }
+
+
+def get_monthly_history(tenant_id: str, months: int) -> list[dict]:
+    sb = get_service_client()
+    now = datetime.now(UTC)
+    contacts = sb.table("contacts").select("id, first_contact_at").eq("tenant_id", tenant_id).execute().data
+    won_deals = (
+        sb.table("deals")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .eq("outcome", "ganho")
+        .execute()
+        .data
+    )
+
+    history = []
+    for i in range(months - 1, -1, -1):
+        ref = _add_months(now, -i)
+        month_start, month_end = _month_bounds(ref)
+        new_leads = sum(1 for c in contacts if month_start <= c["first_contact_at"] <= month_end)
+        month_deals = [d for d in won_deals if month_start <= d["stage_changed_at"] <= month_end]
+        history.append(
+            {
+                "month": f"{MONTH_NAMES_PT[ref.month - 1]}/{ref.year}",
+                "month_key": f"{ref.year}-{ref.month:02d}",
+                "new_leads": new_leads,
+                "revenue": sum(d["value"] for d in month_deals),
+                "net_profit": sum(_deal_net_profit(d) for d in month_deals),
+            }
+        )
+    return history
+
+
+def get_monthly_detail(tenant_id: str, year: int, month: int) -> list[dict]:
+    sb = get_service_client()
+    ref = datetime(year, month, 1, tzinfo=UTC)
+    month_start, month_end = _month_bounds(ref)
+
+    deals = (
+        sb.table("deals")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .eq("outcome", "ganho")
+        .gte("stage_changed_at", month_start)
+        .lte("stage_changed_at", month_end)
+        .execute()
+        .data
+    )
+    if not deals:
+        return []
+
+    contact_ids = list({d["contact_id"] for d in deals})
+    contacts = sb.table("contacts").select("id, name").in_("id", contact_ids).execute().data
+    contact_names = {c["id"]: c["name"] for c in contacts}
+
+    rows = [
+        {
+            "deal_id": d["id"],
+            "contact_id": d["contact_id"],
+            "contact_name": contact_names.get(d["contact_id"], "—"),
+            "products": d["products"],
+            "payment": d["payment"],
+            "value": d["value"],
+            "supplier_value": d.get("supplier_value") or 0,
+            "gift_value": d.get("gift_value") or 0,
+            "freight_value": d.get("freight_value") or 0,
+            "net_profit": _deal_net_profit(d),
+            "stage_changed_at": d["stage_changed_at"],
+        }
+        for d in deals
+    ]
+    rows.sort(key=lambda r: r["stage_changed_at"], reverse=True)
+    return rows

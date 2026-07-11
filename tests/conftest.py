@@ -1,4 +1,16 @@
+import os
 import uuid
+
+# Antes de qualquer import de app.* (que carrega app.config.get_settings(),
+# cacheado com @lru_cache): força EVOLUTION_API_URL/EVOLUTION_API_KEY vazios
+# nesta sessão de teste, não importa o que esteja no .env do dev local. Vários
+# testes (ex.: test_qrcode_retorna_503_quando_evolution_nao_configurada)
+# dependem desse caminho "Evolution não configurada" — variável de ambiente
+# tem precedência sobre .env no pydantic-settings, então isso vale mesmo com
+# EVOLUTION_API_URL preenchido em .env pra rodar o backend manualmente contra
+# a Evolution local de verdade (ver .env.evolution-local).
+os.environ["EVOLUTION_API_URL"] = ""
+os.environ["EVOLUTION_API_KEY"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

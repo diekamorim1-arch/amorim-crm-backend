@@ -16,10 +16,8 @@ def test_me_sem_token(client):
 
 
 def test_admin_impersonando_tenant_via_header(client, admin_token, test_tenant):
-    response = client.get(
-        "/api/v1/auth/me",
-        headers={**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]},
-    )
+    headers = {**auth_headers(admin_token), "X-Impersonate-Tenant": test_tenant["id"]}
+    response = client.get("/api/v1/auth/me", headers=headers)
     assert response.status_code == 200
     body = response.json()
     assert body["role"] == "gestor"
@@ -27,10 +25,12 @@ def test_admin_impersonando_tenant_via_header(client, admin_token, test_tenant):
 
 
 def test_gestor_nao_consegue_impersonar(client, gestor_token, test_tenant):
-    # header só tem efeito quando o papel do token é admin_saas — gestor tentando
-    # usá-lo continua vendo a própria sessão, sem escalar privilégio.
-    response = client.get(
-        "/api/v1/auth/me",
-        headers={**auth_headers(gestor_token), "X-Impersonate-Tenant": "00000000-0000-0000-0000-000000000000"},
-    )
-    assert response.json()["tenant_id"] == test_tenant["id"]
+    # Só admin_saas pode "vestir" outro tenant via header — um gestor
+    # mandando o mesmo header não tem nenhum efeito, seu contexto real
+    # (próprio tenant) é usado normalmente.
+    headers = {**auth_headers(gestor_token), "X-Impersonate-Tenant": "00000000-0000-0000-0000-000000000000"}
+    response = client.get("/api/v1/auth/me", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["role"] == "gestor"
+    assert body["tenant_id"] == test_tenant["id"]

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -14,6 +16,9 @@ class TenantOut(BaseModel):
     plan: str
     status: str
     settings: TenantSettings
+    created_at: str
+    billing_status: str
+    plan_expires_at: str | None = None
 
 
 class TenantCreate(BaseModel):
@@ -30,6 +35,11 @@ class TenantSettingsUpdate(BaseModel):
     tags: list[str] | None = None
     loss_reasons: list[str] | None = None
     business_hours: str | None = None
+
+
+class TenantBillingUpdate(BaseModel):
+    billing_status: Literal["em_dia", "vencido", "cancelado"]
+    plan_expires_at: str | None = None
 
 
 class ImpersonateResponse(BaseModel):

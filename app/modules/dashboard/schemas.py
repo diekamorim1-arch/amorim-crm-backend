@@ -28,3 +28,25 @@ class DashboardMetrics(BaseModel):
     funnel_counts: list[FunnelCount]
     by_channel: list[ChannelStat]
     loss_ranking: list[LossStat]
+
+
+class MonthlyHistoryItem(BaseModel):
+    month: str
+    month_key: str
+    new_leads: int
+    revenue: float
+    net_profit: float
+
+
+class MonthlyDealDetail(BaseModel):
+    deal_id: str
+    contact_id: str
+    contact_name: str
+    products: str
+    payment: str
+    value: float
+    supplier_value: float
+    gift_value: float
+    freight_value: float
+    net_profit: float
+    stage_changed_at: str

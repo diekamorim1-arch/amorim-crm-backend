@@ -41,14 +41,27 @@ services:
       DATABASE_SAVE_DATA_INSTANCE: "true"
       DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
       DATABASE_SAVE_MESSAGE_UPDATE: "true"
-      DATABASE_SAVE_DATA_CONTACTS: "true"
-      DATABASE_SAVE_DATA_CHATS: "true"
-      CACHE_REDIS_ENABLED: "true"
-      CACHE_REDIS_URI: redis://evolution-redis:6379
-      CACHE_REDIS_PREFIX_KEY: evolution
+      # Desligados: evita a corrida "pre-key generation vs. histórico do Meta"
+      # que trava a v2.1.1 num loop infinito de reconexão sem nunca gerar QR
+      # (bug upstream conhecido — EvolutionAPI/evolution-api#2437). Nenhum
+      # desses dados é usado pelo CRM (que já tem seus próprios contacts/chats
+      # no Supabase); é só cache interno da Evolution.
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1033773198"
       WEBHOOK_GLOBAL_URL: http://host.docker.internal:8000/api/v1/webhooks/evolution
       WEBHOOK_GLOBAL_ENABLED: "true"
       WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      # WEBHOOK_GLOBAL_ENABLED sozinho não entrega nada — cada tipo de evento
+      # também precisa do próprio flag WEBHOOK_EVENTS_* (confirmado no
+      # .env.example oficial); sem isso o backend nunca recebe
+      # connection.update nem messages.upsert, mesmo com a URL global certa.
+      WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
+      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
     volumes:
       - evolution_instances_dev:/evolution/instances
 

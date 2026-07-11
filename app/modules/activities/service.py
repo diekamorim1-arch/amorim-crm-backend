@@ -15,6 +15,19 @@ def list_activities(tenant_id: str, contact_id: str) -> list[dict]:
     )
 
 
+def list_recent_activities(tenant_id: str, limit: int) -> list[dict]:
+    sb = get_service_client()
+    return (
+        sb.table("activities")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+    )
+
+
 def create_activity(tenant_id: str, user_id: str, data: dict) -> dict:
     sb = get_service_client()
     # Mesma vulnerabilidade recorrente das Tasks 6/7/8/9: contact_id e deal_id vêm

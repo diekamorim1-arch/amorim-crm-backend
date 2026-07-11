@@ -138,6 +138,64 @@ def test_nao_cria_activity_referenciando_contato_de_outro_tenant(client, gestor_
         sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
 
 
+def test_lista_atividades_recentes_do_tenant_ordenadas(client, gestor_token, gestor_user_id):
+    contact = _create_contact(client, gestor_token, gestor_user_id, whatsapp="+5511899990004")
+    ids: list[str] = []
+    try:
+        primeira = client.post(
+            "/api/v1/activities",
+            json={"contact_id": contact["id"], "type": "nota", "description": "Nota recente 1."},
+            headers=auth_headers(gestor_token),
+        )
+        ids.append(primeira.json()["id"])
+        time.sleep(0.01)
+
+        segunda = client.post(
+            "/api/v1/activities",
+            json={"contact_id": contact["id"], "type": "nota", "description": "Nota recente 2."},
+            headers=auth_headers(gestor_token),
+        )
+        ids.append(segunda.json()["id"])
+
+        response = client.get("/api/v1/activities/recent?limit=2", headers=auth_headers(gestor_token))
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 2
+        assert body[0]["id"] == segunda.json()["id"]
+    finally:
+        _cleanup(contact_ids=[contact["id"]], activity_ids=ids)
+
+
+def test_recent_respeita_o_limit(client, gestor_token, gestor_user_id):
+    contact = _create_contact(client, gestor_token, gestor_user_id, whatsapp="+5511899990005")
+    ids: list[str] = []
+    try:
+        for i in range(3):
+            created = client.post(
+                "/api/v1/activities",
+                json={"contact_id": contact["id"], "type": "nota", "description": f"Nota {i}."},
+                headers=auth_headers(gestor_token),
+            )
+            ids.append(created.json()["id"])
+
+        response = client.get("/api/v1/activities/recent?limit=1", headers=auth_headers(gestor_token))
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+    finally:
+        _cleanup(contact_ids=[contact["id"]], activity_ids=ids)
+
+
+def test_admin_saas_sem_tenant_nao_acessa_recent(client):
+    sb = get_service_client()
+    token, user_id = _create_user_and_sign_in(sb, None, "admin_saas")
+    try:
+        response = client.get("/api/v1/activities/recent", headers=auth_headers(token))
+        assert response.status_code == 400
+    finally:
+        sb.table("user_profiles").delete().eq("id", user_id).execute()
+        sb.auth.admin.delete_user(user_id)
+
+
 def test_nao_cria_activity_referenciando_deal_de_outro_tenant(client, gestor_token, gestor_user_id):
     """Mesma guarda de tenant, agora para deal_id (opcional): um negócio de
     outro tenant não pode ser referenciado numa atividade do tenant do

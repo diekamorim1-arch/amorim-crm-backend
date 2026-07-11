@@ -1,9 +1,5 @@
-import hashlib
-import hmac
-import json
 import uuid
 
-from app.config import get_settings
 from app.core.supabase_client import get_service_client
 from tests.conftest import _create_user_and_sign_in, auth_headers
 
@@ -130,54 +126,47 @@ def test_criar_conversa_rejeita_contato_de_outro_tenant(client, gestor_token):
         sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
 
 
-def test_webhook_rejeita_assinatura_invalida(client):
+def test_webhook_rejeita_token_invalido(client):
     response = client.post(
         "/api/v1/webhooks/evolution",
-        json={"instance": {"phone": "x"}, "message": {"from": "y", "text": "z"}},
-        headers={"x-evolution-signature": "assinatura-errada"},
+        json={
+            "event": "messages.upsert",
+            "instance": "00000000-0000-0000-0000-000000000000",
+            "apikey": "token-errado",
+            "data": {"key": {"remoteJid": "y@s.whatsapp.net", "fromMe": False}, "message": {"conversation": "z"}},
+        },
     )
     assert response.status_code == 401
 
 
 def test_webhook_com_payload_malformado_retorna_400_com_envelope(client):
-    # Important #3 do whole-branch review: payload sem a chave "message" (por
-    # exemplo, um evento diferente da EvolutionAPI) causava um KeyError não
-    # tratado -> 500 cru do FastAPI, quebrando o contrato de erro
-    # {"error": {"code", "message"}}. Assinatura válida, payload malformado.
-    settings = get_settings()
-    payload = {"instance": {"phone": "+5511900006666"}}  # sem "message"
-    body = json.dumps(payload).encode()
-    signature = hmac.new(settings.evolution_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
-
-    response = client.post(
-        "/api/v1/webhooks/evolution",
-        content=body,
-        headers={"x-evolution-signature": signature, "content-type": "application/json"},
-    )
+    # Important #3 do whole-branch review: payload sem "instance"/"apikey"
+    # (por exemplo, um evento inesperado da EvolutionAPI) causava um KeyError
+    # não tratado -> 500 cru do FastAPI, quebrando o contrato de erro
+    # {"error": {"code", "message"}}.
+    response = client.post("/api/v1/webhooks/evolution", json={"event": "messages.upsert"})
     assert response.status_code == 400
     body_json = response.json()
     assert body_json["error"]["code"] == "invalid_payload"
 
 
-def test_webhook_aceita_assinatura_valida_e_processa_mensagem(client, gestor_token, gestor_user_id, test_tenant):
+def test_webhook_aceita_token_valido_e_processa_mensagem(client, gestor_token, gestor_user_id, test_tenant):
     """Cobertura de caminho feliz do webhook sem depender de uma instância real
-    da EvolutionAPI: computamos a assinatura HMAC com o mesmo segredo que o
-    servidor usa (`evolution_webhook_secret`, vazio neste ambiente de teste,
-    mas o algoritmo é o mesmo com um segredo real em produção) e verificamos
-    que a mensagem é ingerida corretamente (conversa criada, unread
+    da EvolutionAPI: cria a conexão já com o evolution_token que pair() teria
+    salvo, manda um payload no formato real de messages.upsert (remoteJid +
+    fromMe + data.message.conversation) com esse mesmo token em "apikey", e
+    verifica que a mensagem é ingerida corretamente (conversa criada, unread
     incrementado, mensagem 'in' persistida, last_interaction_at atualizado)."""
     sb = get_service_client()
-    settings = get_settings()
-    # Números únicos por execução: a EvolutionAPI resolve a conexão só por
-    # `phone` (sem escopo de tenant na busca), então um número fixo poderia
-    # colidir com lixo de uma execução anterior que falhou a limpar (já
-    # aconteceu uma vez neste projeto compartilhado — ver task-8-report.md).
+    token = "token-de-teste-da-instancia"
+    # Números únicos por execução pra não colidir com lixo de uma execução
+    # anterior que falhou a limpar (já aconteceu uma vez neste projeto
+    # compartilhado — ver task-8-report.md).
     unique_suffix = uuid.uuid4().hex[:8]
-    instance_phone = f"+55119{unique_suffix}"
-    contact_whatsapp = f"+55118{unique_suffix}"
+    contact_whatsapp = f"5511988{unique_suffix}"
 
     connection = sb.table("connections").insert(
-        {"tenant_id": test_tenant["id"], "user_id": gestor_user_id, "phone": instance_phone}
+        {"tenant_id": test_tenant["id"], "user_id": gestor_user_id, "phone": f"+551199{unique_suffix}", "evolution_token": token}
     ).execute().data[0]
     contact = client.post(
         "/api/v1/contacts",
@@ -188,17 +177,16 @@ def test_webhook_aceita_assinatura_valida_e_processa_mensagem(client, gestor_tok
     conversation_id = None
     try:
         payload = {
-            "instance": {"phone": instance_phone},
-            "message": {"from": contact_whatsapp, "text": "Olá, preciso de ajuda"},
+            "event": "messages.upsert",
+            "instance": connection["id"],
+            "apikey": token,
+            "data": {
+                "key": {"remoteJid": f"{contact_whatsapp}@s.whatsapp.net", "fromMe": False},
+                "message": {"conversation": "Olá, preciso de ajuda"},
+            },
         }
-        body = json.dumps(payload).encode()
-        signature = hmac.new(settings.evolution_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
 
-        response = client.post(
-            "/api/v1/webhooks/evolution",
-            content=body,
-            headers={"x-evolution-signature": signature, "content-type": "application/json"},
-        )
+        response = client.post("/api/v1/webhooks/evolution", json=payload)
         assert response.status_code == 200
         assert response.json() == {"status": "processed"}
 

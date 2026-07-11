@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.modules.activities.router import router as activities_router
+from app.modules.admin.router import router as admin_router
 from app.modules.appointments.router import router as appointments_router
 from app.modules.attachments.router import router as attachments_router
 from app.modules.auth.router import router as auth_router
@@ -17,9 +18,9 @@ from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
 from app.webhooks.evolution import router as evolution_webhook_router
 
-# Carrega e valida as settings já na importação do app: se EVOLUTION_WEBHOOK_SECRET
-# estiver vazio fora do ambiente de desenvolvimento, get_settings() levanta
-# ValueError aqui (falha ao subir o serviço) em vez de só na 1ª chamada ao webhook.
+# Carrega as settings já na importação do app, pra falhar cedo (import de
+# app.main) se alguma env var obrigatória (ex.: SUPABASE_*) estiver faltando,
+# em vez de só na 1ª requisição.
 get_settings()
 
 app = FastAPI(title="Amorim CRM API")
@@ -51,6 +52,7 @@ app.include_router(activities_router, prefix="/api/v1")
 app.include_router(connections_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 
 
 @app.get("/health")
