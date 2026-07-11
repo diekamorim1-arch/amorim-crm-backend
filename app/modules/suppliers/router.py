@@ -10,6 +10,7 @@ from app.modules.suppliers.schemas import (
     SupplierOut,
     SupplierProductCreate,
     SupplierProductOut,
+    SupplierProductUpdate,
     SupplierUpdate,
 )
 
@@ -44,6 +45,11 @@ def list_products(supplier_id: str, tenant_id: str = Depends(require_tenant)):
 @router.post("/suppliers/{supplier_id}/products", response_model=SupplierProductOut)
 def create_product(supplier_id: str, body: SupplierProductCreate, user: AuthContext = Depends(require_role("gestor"))):
     return service.create_product(user.tenant_id, supplier_id, body.name, body.current_price)
+
+
+@router.patch("/supplier-products/{product_id}", response_model=SupplierProductOut)
+def update_product(product_id: str, body: SupplierProductUpdate, user: AuthContext = Depends(require_role("gestor"))):
+    return service.update_product(user.tenant_id, product_id, body.name, body.current_price)
 
 
 @router.patch("/supplier-products/{product_id}/price", response_model=SupplierProductOut)

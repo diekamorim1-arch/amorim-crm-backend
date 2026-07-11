@@ -97,6 +97,72 @@ def test_gestor_atualiza_fornecedor_com_patch_parcial(client, gestor_token):
         _cleanup_supplier(supplier["id"])
 
 
+def test_gestor_atualiza_nome_do_produto_sem_gerar_historico_de_preco(client, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944443333")
+    try:
+        product = _create_product(client, gestor_token, supplier["id"], current_price=3000)
+
+        renamed = client.patch(
+            f"/api/v1/supplier-products/{product['id']}", json={"name": "iPhone 15 Pro"}, headers=auth_headers(gestor_token)
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "iPhone 15 Pro"
+        assert renamed.json()["current_price"] == 3000
+
+        # renomear sozinho não deve criar entrada de histórico de preço.
+        history = client.get(
+            f"/api/v1/supplier-products/{product['id']}/price-history", headers=auth_headers(gestor_token)
+        ).json()
+        assert history == []
+
+        both = client.patch(
+            f"/api/v1/supplier-products/{product['id']}",
+            json={"name": "iPhone 15 Pro Max", "current_price": 3800},
+            headers=auth_headers(gestor_token),
+        )
+        assert both.status_code == 200
+        assert both.json()["name"] == "iPhone 15 Pro Max"
+        assert both.json()["current_price"] == 3800
+
+        history_after = client.get(
+            f"/api/v1/supplier-products/{product['id']}/price-history", headers=auth_headers(gestor_token)
+        ).json()
+        assert len(history_after) == 1
+        assert history_after[0]["price"] == 3800
+    finally:
+        _cleanup_supplier(supplier["id"])
+
+
+def test_atualizar_produto_com_mesmo_preco_nao_gera_historico(client, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944444444")
+    try:
+        product = _create_product(client, gestor_token, supplier["id"], current_price=3000)
+        response = client.patch(
+            f"/api/v1/supplier-products/{product['id']}",
+            json={"name": product["name"], "current_price": 3000},
+            headers=auth_headers(gestor_token),
+        )
+        assert response.status_code == 200
+        history = client.get(
+            f"/api/v1/supplier-products/{product['id']}/price-history", headers=auth_headers(gestor_token)
+        ).json()
+        assert history == []
+    finally:
+        _cleanup_supplier(supplier["id"])
+
+
+def test_atendente_nao_atualiza_produto(client, atendente_token, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944445555")
+    try:
+        product = _create_product(client, gestor_token, supplier["id"])
+        response = client.patch(
+            f"/api/v1/supplier-products/{product['id']}", json={"name": "Não Deveria"}, headers=auth_headers(atendente_token)
+        )
+        assert response.status_code == 403
+    finally:
+        _cleanup_supplier(supplier["id"])
+
+
 def test_atendente_le_todos_os_endpoints_de_leitura(client, atendente_token, gestor_token):
     supplier = _create_supplier(client, gestor_token, whatsapp="+5511944443333")
     try:

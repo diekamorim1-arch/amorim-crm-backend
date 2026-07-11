@@ -9,6 +9,7 @@ class SupplierOut(BaseModel):
     contact_name: str | None = None
     email: str | None = None
     notes: str | None = None
+    created_at: str
 
 
 class SupplierCreate(BaseModel):
@@ -41,12 +42,18 @@ class SupplierProductCreate(BaseModel):
     current_price: float
 
 
+class SupplierProductUpdate(BaseModel):
+    name: str | None = None
+    current_price: float | None = None
+
+
 class PriceUpdate(BaseModel):
     price: float
 
 
 class PriceChangeOut(BaseModel):
     id: str
+    tenant_id: str
     supplier_product_id: str
     price: float
     changed_at: str

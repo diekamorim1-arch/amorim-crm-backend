@@ -144,6 +144,21 @@ def move_deal(tenant_id: str, deal_id: str, stage: str, user_id: str) -> dict:
     return updated
 
 
+def delete_deal(tenant_id: str, actor_user_id: str, deal_id: str) -> None:
+    sb = get_service_client()
+    _get_deal(sb, tenant_id, deal_id)
+    # activities/appointments/attachments têm deal_id opcional e FK NO ACTION
+    # (não CASCADE) pra deals — sem limpar essas referências antes, o DELETE
+    # abaixo estouraria uma violação de FK crua em vez de simplesmente apagar
+    # o negócio. O registro em si (a mensagem, o agendamento, o anexo) deve
+    # sobreviver — só deixa de estar vinculado a um negócio específico.
+    sb.table("activities").update({"deal_id": None}).eq("tenant_id", tenant_id).eq("deal_id", deal_id).execute()
+    sb.table("appointments").update({"deal_id": None}).eq("tenant_id", tenant_id).eq("deal_id", deal_id).execute()
+    sb.table("attachments").update({"deal_id": None}).eq("tenant_id", tenant_id).eq("deal_id", deal_id).execute()
+    sb.table("deals").delete().eq("tenant_id", tenant_id).eq("id", deal_id).execute()
+    log_audit_event(tenant_id, actor_user_id, "DELETE", "deals", deal_id)
+
+
 def mark_lost(tenant_id: str, actor_user_id: str, deal_id: str, reason: str) -> dict:
     sb = get_service_client()
     _get_deal(sb, tenant_id, deal_id)

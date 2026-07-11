@@ -428,3 +428,65 @@ def test_admin_impersonando_nao_atribui_lead_a_outro_usuario_arbitrario(client, 
         headers=headers,
     )
     assert response.status_code == 404
+
+
+def test_gestor_exclui_deal_e_desvincula_activity_appointment_attachment(client, gestor_token, gestor_user_id):
+    """activities/appointments/attachments têm deal_id opcional e FK NO ACTION
+    pra deals — excluir o negócio precisa desvincular essas linhas (deal_id
+    vira null) em vez de falhar por violação de FK ou apagar os registros."""
+    sb = get_service_client()
+    deal = _create_lead(client, gestor_token, gestor_user_id, whatsapp="+5511955552222")
+    contact_id = deal["contact_id"]
+
+    activity = sb.table("activities").insert(
+        {
+            "tenant_id": deal["tenant_id"], "contact_id": contact_id, "deal_id": deal["id"],
+            "user_id": gestor_user_id, "type": "mensagem", "description": "Nota de teste",
+        }
+    ).execute().data[0]
+    appointment = client.post(
+        "/api/v1/appointments",
+        json={
+            "contact_id": contact_id, "deal_id": deal["id"], "type": "atendimento",
+            "starts_at": "2026-09-01T10:00:00Z", "ends_at": "2026-09-01T10:30:00Z", "owner_id": gestor_user_id,
+        },
+        headers=auth_headers(gestor_token),
+    ).json()
+
+    try:
+        response = client.delete(f"/api/v1/deals/{deal['id']}", headers=auth_headers(gestor_token))
+        assert response.status_code == 200
+
+        assert sb.table("deals").select("id").eq("id", deal["id"]).execute().data == []
+
+        surviving_activity = sb.table("activities").select("deal_id").eq("id", activity["id"]).execute().data[0]
+        assert surviving_activity["deal_id"] is None
+
+        surviving_appointment = (
+            sb.table("appointments").select("deal_id").eq("id", appointment["id"]).execute().data[0]
+        )
+        assert surviving_appointment["deal_id"] is None
+    finally:
+        # create_lead também grava sua própria activity de "Novo lead criado"
+        # (contact_id + deal_id) — o delete acima desvincula o deal_id dela
+        # também, então a limpeza precisa varrer todas as activities do
+        # contato, não só a que este teste inseriu manualmente.
+        sb.table("appointments").delete().eq("id", appointment["id"]).execute()
+        sb.table("activities").delete().eq("contact_id", contact_id).execute()
+        sb.table("contacts").delete().eq("id", contact_id).execute()
+
+
+def test_atendente_nao_exclui_deal(client, atendente_token, atendente_user_id):
+    deal = _create_lead(client, atendente_token, atendente_user_id, whatsapp="+5511955553333")
+    try:
+        response = client.delete(f"/api/v1/deals/{deal['id']}", headers=auth_headers(atendente_token))
+        assert response.status_code == 403
+    finally:
+        _cleanup_lead(deal["contact_id"])
+
+
+def test_excluir_deal_inexistente_404(client, gestor_token):
+    response = client.delete(
+        "/api/v1/deals/00000000-0000-0000-0000-000000000000", headers=auth_headers(gestor_token)
+    )
+    assert response.status_code == 404

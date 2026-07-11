@@ -58,6 +58,16 @@ def update(
     return service.update_deal(tenant_id, user.user_id, deal_id, body.model_dump())
 
 
+@router.delete("/deals/{deal_id}")
+def delete(
+    deal_id: str,
+    user: AuthContext = Depends(require_role("gestor")),
+    tenant_id: str = Depends(require_tenant),
+):
+    service.delete_deal(tenant_id, user.user_id, deal_id)
+    return {"status": "deleted"}
+
+
 @router.post("/deals/{deal_id}/move", response_model=DealOut)
 def move(deal_id: str, body: MoveDealBody, user: AuthContext = Depends(get_current_user)):
     return service.move_deal(user.tenant_id, deal_id, body.stage, user.user_id)

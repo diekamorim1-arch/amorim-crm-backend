@@ -13,6 +13,7 @@ from app.modules.contacts.router import router as contacts_router
 from app.modules.conversations.router import router as conversations_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.deals.router import router as deals_router
+from app.modules.expenses.router import router as expenses_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.users.router import router as users_router
@@ -53,6 +54,7 @@ app.include_router(connections_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(expenses_router, prefix="/api/v1")
 
 
 @app.get("/health")

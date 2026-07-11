@@ -54,6 +54,32 @@ def create_product(tenant_id: str, supplier_id: str, name: str, current_price: f
     )
 
 
+def update_product(tenant_id: str, product_id: str, name: str | None, price: float | None) -> dict:
+    sb = get_service_client()
+    rows = sb.table("supplier_products").select("*").eq("tenant_id", tenant_id).eq("id", product_id).execute().data
+    if not rows:
+        raise AppError(404, "not_found", "Produto não encontrado.")
+    product = rows[0]
+    now = datetime.now(UTC).isoformat()
+    patch: dict = {}
+    if name is not None:
+        patch["name"] = name
+    # Mesma regra do reducer local que este endpoint substitui: só grava uma
+    # entrada em supplier_price_changes quando o preço realmente muda, não a
+    # cada edição do produto (ex.: editar só o nome não deveria poluir o
+    # histórico de preço com uma entrada idêntica à anterior).
+    price_changed = price is not None and price != product["current_price"]
+    if price_changed:
+        patch["current_price"] = price
+        patch["updated_at"] = now
+        sb.table("supplier_price_changes").insert(
+            {"tenant_id": tenant_id, "supplier_product_id": product_id, "price": price, "changed_at": now}
+        ).execute()
+    if not patch:
+        return product
+    return sb.table("supplier_products").update(patch).eq("id", product_id).execute().data[0]
+
+
 def update_price(tenant_id: str, product_id: str, price: float) -> dict:
     sb = get_service_client()
     rows = sb.table("supplier_products").select("id").eq("tenant_id", tenant_id).eq("id", product_id).execute().data

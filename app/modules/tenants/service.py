@@ -85,6 +85,44 @@ def check_tenant_for_impersonation(tenant_id: str) -> dict:
     return rows[0]
 
 
+def delete_tenant(tenant_id: str) -> None:
+    sb = get_service_client()
+    if not sb.table("tenants").select("id").eq("id", tenant_id).execute().data:
+        raise AppError(404, "not_found", "Loja não encontrada.")
+
+    # Todas as FKs pra tenants são NO ACTION (não CASCADE) — sem essas
+    # checagens, um DELETE com qualquer linha vinculada estouraria um erro de
+    # violação de FK do Postgres (500 cru) em vez de um 409 claro. contacts/
+    # deals/suppliers cobrem indiretamente activities/appointments/
+    # attachments/conversations/messages/supplier_products/
+    # supplier_price_changes (todos exigem um contact_id ou supplier_id, que
+    # só existe se já houver um contato/fornecedor real). connections não
+    # depende de contact_id, então precisa de checagem própria — dá pra
+    # conectar o WhatsApp antes de cadastrar qualquer cliente.
+    linked_contact = sb.table("contacts").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
+    linked_deal = sb.table("deals").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
+    linked_supplier = sb.table("suppliers").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
+    linked_connection = sb.table("connections").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
+    # create_tenant já cria um gestor junto com a loja — uma loja "vazia" tem
+    # exatamente esse 1 perfil, nunca 0. Mais de 1 significa que alguém já
+    # convidou gente pra essa loja, ou seja, ela já está em uso de verdade.
+    user_profiles = sb.table("user_profiles").select("id").eq("tenant_id", tenant_id).execute().data
+
+    if linked_contact or linked_deal or linked_supplier or linked_connection or len(user_profiles) > 1:
+        raise AppError(
+            409,
+            "tenant_has_links",
+            "Esta loja já tem dados reais (clientes, negócios, fornecedores, WhatsApp conectado ou mais "
+            "de um usuário) — suspenda em vez de excluir.",
+        )
+
+    # user_profiles.id referencia auth.users(id) on delete cascade — apagar o
+    # usuário via Auth Admin já remove a linha de user_profiles junto.
+    for profile in user_profiles:
+        sb.auth.admin.delete_user(profile["id"])
+    sb.table("tenants").delete().eq("id", tenant_id).execute()
+
+
 def update_billing(tenant_id: str, billing_status: str, plan_expires_at: str | None) -> dict:
     sb = get_service_client()
     rows = (

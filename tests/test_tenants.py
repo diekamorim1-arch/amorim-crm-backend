@@ -118,6 +118,74 @@ def test_gestor_nao_cria_tenant(client, gestor_token):
     assert response.status_code == 403
 
 
+def test_admin_exclui_loja_vazia(client, admin_token):
+    """Uma loja recém-criada só tem o gestor padrão (create_tenant) — nenhum
+    contato/negócio/fornecedor/conexão real ainda, então deve poder ser
+    excluída (ex.: loja criada por engano)."""
+    sb = get_service_client()
+    created = client.post(
+        "/api/v1/tenants", json={"name": "Loja Vazia Pra Excluir"}, headers=auth_headers(admin_token)
+    ).json()
+    gestor_id = sb.table("user_profiles").select("id").eq("tenant_id", created["id"]).execute().data[0]["id"]
+
+    response = client.delete(f"/api/v1/tenants/{created['id']}", headers=auth_headers(admin_token))
+    assert response.status_code == 200
+
+    assert sb.table("tenants").select("id").eq("id", created["id"]).execute().data == []
+    assert sb.table("user_profiles").select("id").eq("id", gestor_id).execute().data == []
+
+
+def test_gestor_nao_exclui_loja(client, gestor_token, test_tenant):
+    response = client.delete(f"/api/v1/tenants/{test_tenant['id']}", headers=auth_headers(gestor_token))
+    assert response.status_code == 403
+
+
+def test_admin_nao_exclui_loja_com_contato(client, admin_token):
+    sb = get_service_client()
+    created = client.post(
+        "/api/v1/tenants", json={"name": "Loja Com Cliente"}, headers=auth_headers(admin_token)
+    ).json()
+    gestor_id = sb.table("user_profiles").select("id").eq("tenant_id", created["id"]).execute().data[0]["id"]
+    contact = sb.table("contacts").insert(
+        {
+            "tenant_id": created["id"], "name": "Cliente Real", "whatsapp": "+5511900000010",
+            "owner_id": gestor_id, "origin": "outro",
+        }
+    ).execute().data[0]
+    try:
+        response = client.delete(f"/api/v1/tenants/{created['id']}", headers=auth_headers(admin_token))
+        assert response.status_code == 409
+        assert sb.table("tenants").select("id").eq("id", created["id"]).execute().data != []
+    finally:
+        sb.table("contacts").delete().eq("id", contact["id"]).execute()
+        sb.auth.admin.delete_user(gestor_id)
+        sb.table("tenants").delete().eq("id", created["id"]).execute()
+
+
+def test_admin_nao_exclui_loja_com_mais_de_um_usuario(client, admin_token):
+    sb = get_service_client()
+    created = client.post(
+        "/api/v1/tenants", json={"name": "Loja Com Equipe"}, headers=auth_headers(admin_token)
+    ).json()
+    second_token, second_user_id = _create_user_and_sign_in(sb, created["id"], "atendente")
+    try:
+        response = client.delete(f"/api/v1/tenants/{created['id']}", headers=auth_headers(admin_token))
+        assert response.status_code == 409
+    finally:
+        sb.table("user_profiles").delete().eq("id", second_user_id).execute()
+        sb.auth.admin.delete_user(second_user_id)
+        for row in sb.table("user_profiles").select("id").eq("tenant_id", created["id"]).execute().data:
+            sb.auth.admin.delete_user(row["id"])
+        sb.table("tenants").delete().eq("id", created["id"]).execute()
+
+
+def test_admin_exclui_loja_inexistente_404(client, admin_token):
+    response = client.delete(
+        "/api/v1/tenants/00000000-0000-0000-0000-000000000000", headers=auth_headers(admin_token)
+    )
+    assert response.status_code == 404
+
+
 def test_admin_atualiza_billing_de_uma_loja(client, admin_token, test_tenant):
     expires = (datetime.now(UTC) + timedelta(days=30)).isoformat()
     response = client.patch(

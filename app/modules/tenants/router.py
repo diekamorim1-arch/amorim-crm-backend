@@ -50,6 +50,12 @@ def update_billing(tenant_id: str, body: TenantBillingUpdate, _: AuthContext = D
     return service.update_billing(tenant_id, body.billing_status, body.plan_expires_at)
 
 
+@router.delete("/{tenant_id}")
+def delete(tenant_id: str, _: AuthContext = Depends(require_role("admin_saas"))):
+    service.delete_tenant(tenant_id)
+    return {"status": "deleted"}
+
+
 @router.post("/{tenant_id}/impersonate", response_model=ImpersonateResponse)
 def impersonate(tenant_id: str, _: AuthContext = Depends(require_role("admin_saas"))):
     tenant = service.check_tenant_for_impersonation(tenant_id)
