@@ -116,6 +116,41 @@ def get_qrcode(tenant_id: str, connection_id: str, caller_user_id: str, caller_r
     return {"qrcode": data.get("base64"), "status": connection["status"]}
 
 
+def delete_connection(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: str) -> None:
+    sb = get_service_client()
+    connection = _get_connection(sb, tenant_id, connection_id)
+    _assert_can_manage(connection, caller_user_id, caller_role)
+    settings = get_settings()
+    if settings.evolution_api_url:
+        # Best-effort: a instância pode nunca ter sido criada na Evolution
+        # (ex.: pair() nunca foi chamado, ou falhou antes de criar), ou já
+        # ter sido removida manualmente — nenhum desses casos deve impedir a
+        # exclusão da conexão aqui, que é o efeito que o usuário está pedindo
+        # ("quero poder criar um novo login quando eu quiser": limpar uma
+        # conexão presa/com número errado e recomeçar do zero). O
+        # instanceName é reaproveitado do connection_id (ver pair()), então
+        # apagar a linha aqui garante que uma nova conexão sempre usa um
+        # instanceName novo (novo UUID), nunca colidindo com uma instância
+        # órfã que porventura sobre na Evolution.
+        try:
+            httpx.delete(
+                f"{settings.evolution_api_url}/instance/logout/{connection_id}",
+                headers={"apikey": settings.evolution_api_key},
+                timeout=10,
+            )
+        except httpx.HTTPError:
+            pass
+        try:
+            httpx.delete(
+                f"{settings.evolution_api_url}/instance/delete/{connection_id}",
+                headers={"apikey": settings.evolution_api_key},
+                timeout=10,
+            )
+        except httpx.HTTPError:
+            pass
+    sb.table("connections").delete().eq("id", connection_id).execute()
+
+
 def disconnect(tenant_id: str, connection_id: str, caller_user_id: str, caller_role: str) -> dict:
     sb = get_service_client()
     connection = _get_connection(sb, tenant_id, connection_id)

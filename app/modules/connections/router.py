@@ -24,6 +24,12 @@ def create(body: ConnectionCreate, user: AuthContext = Depends(get_current_user)
     return service.create_connection(user.tenant_id, user.user_id, body.phone)
 
 
+@router.delete("/{connection_id}")
+def delete(connection_id: str, user: AuthContext = Depends(get_current_user)):
+    service.delete_connection(user.tenant_id, connection_id, user.user_id, user.role)
+    return {"status": "deleted"}
+
+
 @router.post("/{connection_id}/pair", response_model=ConnectionOut)
 def pair(connection_id: str, user: AuthContext = Depends(get_current_user)):
     return service.pair(user.tenant_id, connection_id, user.user_id, user.role)

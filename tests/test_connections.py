@@ -198,6 +198,85 @@ def test_send_message_retorna_503_quando_evolution_nao_configurada(client, gesto
         _cleanup_connections([connection["id"]])
 
 
+def test_deleta_a_propria_conexao_e_libera_criar_outra(client, gestor_token, gestor_user_id, test_tenant):
+    """Cobre o pedido de produto "criar um novo login na Evolution API quando
+    eu quiser": sem delete, um usuário preso com uma conexão com número
+    errado (ou instância travada do lado da Evolution) nunca conseguia
+    recomeçar, porque create_connection bloqueia uma segunda conexão pro
+    mesmo usuário (409, ver test_nao_cria_segunda_conexao_pro_mesmo_usuario).
+    """
+    sb = get_service_client()
+    connection = (
+        sb.table("connections")
+        .insert({"tenant_id": test_tenant["id"], "user_id": gestor_user_id, "phone": "+5511000000020"})
+        .execute()
+        .data[0]
+    )
+    deleted = client.delete(f"/api/v1/connections/{connection['id']}", headers=auth_headers(gestor_token))
+    assert deleted.status_code == 200
+    assert sb.table("connections").select("id").eq("id", connection["id"]).execute().data == []
+
+    recreated = client.post(
+        "/api/v1/connections", json={"phone": "+5511000000021"}, headers=auth_headers(gestor_token)
+    )
+    try:
+        assert recreated.status_code == 200
+        assert recreated.json()["phone"] == "+5511000000021"
+    finally:
+        _cleanup_connections([recreated.json()["id"]] if recreated.status_code == 200 else [])
+
+
+def test_atendente_nao_deleta_conexao_de_outro_usuario(client, atendente_token, test_tenant):
+    sb = get_service_client()
+    other_token, other_user_id = _create_user_and_sign_in(sb, test_tenant["id"], "atendente")
+    try:
+        other_connection = (
+            sb.table("connections")
+            .insert({"tenant_id": test_tenant["id"], "user_id": other_user_id, "phone": "+5511000000022"})
+            .execute()
+            .data[0]
+        )
+        try:
+            response = client.delete(
+                f"/api/v1/connections/{other_connection['id']}", headers=auth_headers(atendente_token)
+            )
+            assert response.status_code == 403
+            assert sb.table("connections").select("id").eq("id", other_connection["id"]).execute().data != []
+        finally:
+            sb.table("connections").delete().eq("id", other_connection["id"]).execute()
+    finally:
+        sb.table("user_profiles").delete().eq("id", other_user_id).execute()
+        sb.auth.admin.delete_user(other_user_id)
+
+
+def test_delete_rejeita_connection_id_de_outro_tenant(client, gestor_token):
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert(
+        {"name": "Loja Alheia Delete", "slug": f"alheia-del-{uuid.uuid4().hex[:8]}"}
+    ).execute().data[0]
+    try:
+        foreign_token, foreign_user_id = _create_user_and_sign_in(sb, foreign_tenant["id"], "gestor")
+        try:
+            foreign_connection = (
+                sb.table("connections")
+                .insert({"tenant_id": foreign_tenant["id"], "user_id": foreign_user_id, "phone": "+5511977770001"})
+                .execute()
+                .data[0]
+            )
+            try:
+                response = client.delete(
+                    f"/api/v1/connections/{foreign_connection['id']}", headers=auth_headers(gestor_token)
+                )
+                assert response.status_code == 404
+            finally:
+                sb.table("connections").delete().eq("id", foreign_connection["id"]).execute()
+        finally:
+            sb.table("user_profiles").delete().eq("id", foreign_user_id).execute()
+            sb.auth.admin.delete_user(foreign_user_id)
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+
+
 def test_pair_rejeita_connection_id_de_outro_tenant(client, gestor_token):
     """`_get_connection` filtra por tenant_id antes de buscar pelo id
     (ver brief), então um connection_id de outro tenant já deveria resultar em
