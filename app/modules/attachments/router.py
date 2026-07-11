@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import AuthContext
 from app.deps import get_current_user, require_tenant
@@ -21,7 +22,11 @@ async def create(
     tenant_id: str = Depends(require_tenant),
 ):
     content = await file.read()
-    return service.create_attachment(
+    # Mesmo bug de app/modules/users/router.py::upload_my_avatar —
+    # create_attachment é síncrona/bloqueante; run_in_threadpool evita travar
+    # o event loop (e todo mundo mais usando o app) durante o upload.
+    return await run_in_threadpool(
+        service.create_attachment,
         tenant_id,
         user.user_id,
         contact_id,

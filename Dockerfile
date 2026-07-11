@@ -15,4 +15,7 @@ COPY app ./app
 USER appuser
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --workers 2: um processo lento (ex.: upload bloqueante que escapou do
+# run_in_threadpool) não trava os outros workers — cada um tem seu próprio
+# event loop. Ajustar conforme CPU disponível na VPS se ela crescer.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import AuthContext
 from app.deps import get_current_user, require_role, require_tenant
@@ -30,7 +31,19 @@ def update_me(body: MeUpdate, user: AuthContext = Depends(get_current_user)):
 @router.post("/me/avatar", response_model=UserOut)
 async def upload_my_avatar(file: UploadFile = File(...), user: AuthContext = Depends(get_current_user)):
     content = await file.read()
-    return service.upload_avatar(user.user_id, file.filename or "avatar", file.content_type or "application/octet-stream", content)
+    # service.upload_avatar é síncrona (supabase-py bloqueante: upload real
+    # pro Storage + insert no banco) — chamada direto dentro de um async def
+    # travaria o event loop inteiro pela duração do upload, e como o uvicorn
+    # roda com um processo só (sem --workers), isso significa nenhuma outra
+    # requisição de nenhum outro usuário sendo atendida nesse intervalo.
+    # run_in_threadpool despacha pra uma thread separada, sem bloquear.
+    return await run_in_threadpool(
+        service.upload_avatar,
+        user.user_id,
+        file.filename or "avatar",
+        file.content_type or "application/octet-stream",
+        content,
+    )
 
 
 @router.post("/me/notifications-seen", response_model=UserOut)
