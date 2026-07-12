@@ -76,6 +76,88 @@ def test_gestor_cria_fornecedor_produto_e_historico_de_preco_fica_correto(client
         _cleanup_supplier(supplier["id"])
 
 
+def test_produto_grava_e_atualiza_cores(client, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944448888")
+    try:
+        product = _create_product(client, gestor_token, supplier["id"], colors="Preto, Branco, Azul")
+        assert product["colors"] == "Preto, Branco, Azul"
+
+        updated = client.patch(
+            f"/api/v1/supplier-products/{product['id']}", json={"colors": "Preto, Branco"}, headers=auth_headers(gestor_token)
+        )
+        assert updated.status_code == 200
+        assert updated.json()["colors"] == "Preto, Branco"
+    finally:
+        _cleanup_supplier(supplier["id"])
+
+
+def test_bulk_import_cria_varios_produtos_numa_unica_chamada(client, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944449999")
+    try:
+        response = client.post(
+            f"/api/v1/suppliers/{supplier['id']}/products/bulk",
+            json={
+                "products": [
+                    {"name": "iPhone 15", "colors": "Preto, Branco", "current_price": 4500},
+                    {"name": "iPhone 15 Pro", "colors": "Titânio Natural", "current_price": 6500},
+                    {"name": "AirPods Pro", "current_price": 1800},
+                ]
+            },
+            headers=auth_headers(gestor_token),
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 3
+        assert {p["name"] for p in body} == {"iPhone 15", "iPhone 15 Pro", "AirPods Pro"}
+        assert all(p["supplier_id"] == supplier["id"] for p in body)
+        assert next(p for p in body if p["name"] == "iPhone 15")["colors"] == "Preto, Branco"
+        assert next(p for p in body if p["name"] == "AirPods Pro")["colors"] is None
+
+        listed = client.get(f"/api/v1/suppliers/{supplier['id']}/products", headers=auth_headers(gestor_token)).json()
+        assert len(listed) == 3
+    finally:
+        _cleanup_supplier(supplier["id"])
+
+
+def test_atendente_nao_faz_bulk_import(client, atendente_token, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944440101")
+    try:
+        response = client.post(
+            f"/api/v1/suppliers/{supplier['id']}/products/bulk",
+            json={"products": [{"name": "Não Deveria", "current_price": 100}]},
+            headers=auth_headers(atendente_token),
+        )
+        assert response.status_code == 403
+    finally:
+        _cleanup_supplier(supplier["id"])
+
+
+def test_bulk_import_rejeita_fornecedor_de_outro_tenant(client, gestor_token):
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert({"name": "Loja Alheia Bulk", "slug": f"alheia-{uuid.uuid4().hex[:8]}"}).execute().data[0]
+    try:
+        foreign_supplier = (
+            sb.table("suppliers")
+            .insert({"tenant_id": foreign_tenant["id"], "name": "Fornecedor Alheio Bulk", "whatsapp": "+5511900000001"})
+            .execute()
+            .data[0]
+        )
+        try:
+            response = client.post(
+                f"/api/v1/suppliers/{foreign_supplier['id']}/products/bulk",
+                json={"products": [{"name": "Produto Indevido", "current_price": 100}]},
+                headers=auth_headers(gestor_token),
+            )
+            assert response.status_code == 404
+
+            leaked = sb.table("supplier_products").select("id").eq("supplier_id", foreign_supplier["id"]).execute().data
+            assert leaked == []
+        finally:
+            sb.table("suppliers").delete().eq("id", foreign_supplier["id"]).execute()
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+
+
 def test_gestor_atualiza_fornecedor_com_patch_parcial(client, gestor_token):
     supplier = _create_supplier(
         client, gestor_token, whatsapp="+5511944442222", contact_name="Joao", email="joao@fornecedor.com"

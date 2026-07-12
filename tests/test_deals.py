@@ -12,7 +12,9 @@ def _create_lead(client, token, owner_id, **overrides):
     payload.update(overrides)
     response = client.post("/api/v1/leads", json=payload, headers=auth_headers(token))
     assert response.status_code == 200
-    return response.json()
+    # /leads devolve {"contact": ..., "deal": ...} numa única resposta (em
+    # vez do frontend precisar de uma segunda chamada pra buscar o contato).
+    return response.json()["deal"]
 
 
 def _cleanup_lead(*contact_ids: str) -> None:
@@ -57,6 +59,59 @@ def test_criar_lead_gera_contato_e_deal(client, gestor_token, gestor_user_id):
         assert activities[0]["type"] == "mudanca_estagio"
     finally:
         _cleanup_lead(deal["contact_id"])
+
+
+def test_criar_lead_com_produto_de_fornecedor_numa_unica_chamada(client, gestor_token, gestor_user_id, test_tenant):
+    # Antes, o frontend fazia 3 chamadas (createContact + createDeal +
+    # updateDealFinancials) porque /leads não aceitava supplier_product_id.
+    # Agora /leads grava tudo de uma vez e devolve contact+deal na mesma
+    # resposta, sem precisar de uma segunda chamada pra buscar o contato.
+    sb = get_service_client()
+    supplier = (
+        sb.table("suppliers")
+        .insert({"tenant_id": test_tenant["id"], "name": "Fornecedor Lead Teste", "whatsapp": "+5511900004444"})
+        .execute()
+        .data[0]
+    )
+    try:
+        product = (
+            sb.table("supplier_products")
+            .insert(
+                {
+                    "tenant_id": test_tenant["id"], "supplier_id": supplier["id"],
+                    "name": "iPhone 15 Pro Max 256GB", "current_price": 6500,
+                }
+            )
+            .execute()
+            .data[0]
+        )
+        try:
+            response = client.post(
+                "/api/v1/leads",
+                json={
+                    "name": "Lead Fornecedor", "whatsapp": "+5511988880077", "origin": "instagram_organico",
+                    "value": 7000, "owner_id": gestor_user_id,
+                    "supplier_product_id": product["id"], "supplier_value": 6500,
+                },
+                headers=auth_headers(gestor_token),
+            )
+            assert response.status_code == 200
+            body = response.json()
+
+            deal = body["deal"]
+            assert deal["supplier_product_id"] == product["id"]
+            assert deal["supplier_value"] == 6500
+            assert deal["title"] == "iPhone 15 Pro Max 256GB"
+
+            contact = body["contact"]
+            assert contact["id"] == deal["contact_id"]
+            assert contact["name"] == "Lead Fornecedor"
+            assert contact["journey_status"] == "lead"
+        finally:
+            _cleanup_lead(response.json()["deal"]["contact_id"] if response.status_code == 200 else "")
+    finally:
+        sb.table("supplier_products").delete().eq("id", product["id"]).execute()
+        sb.table("suppliers").delete().eq("id", supplier["id"]).execute()
 
 
 def test_mover_deal_para_pos_venda_marca_ganho_e_journey_status_cliente(client, gestor_token, gestor_user_id):
@@ -408,10 +463,10 @@ def test_admin_impersonando_cria_lead_como_proprio_responsavel(client, admin_tok
     )
     try:
         assert response.status_code == 200
-        assert response.json()["owner_id"] == admin_user_id
+        assert response.json()["deal"]["owner_id"] == admin_user_id
     finally:
         if response.status_code == 200:
-            _cleanup_lead(response.json()["contact_id"])
+            _cleanup_lead(response.json()["deal"]["contact_id"])
 
 
 def test_admin_impersonando_nao_atribui_lead_a_outro_usuario_arbitrario(client, admin_token, test_tenant):

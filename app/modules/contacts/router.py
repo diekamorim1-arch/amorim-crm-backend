@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from app.core.auth import AuthContext
 from app.deps import get_current_user, require_tenant
@@ -28,17 +28,21 @@ def get(contact_id: str, tenant_id: str = Depends(require_tenant)):
 @router.post("", response_model=ContactOut)
 def create(
     body: ContactCreate,
+    background_tasks: BackgroundTasks,
     user: AuthContext = Depends(get_current_user),
     tenant_id: str = Depends(require_tenant),
 ):
-    return service.create_contact(tenant_id, user.user_id, body.model_dump(), user.is_impersonating)
+    return service.create_contact(tenant_id, user.user_id, body.model_dump(), background_tasks, user.is_impersonating)
 
 
 @router.patch("/{contact_id}", response_model=ContactOut)
 def update(
     contact_id: str,
     body: ContactUpdate,
+    background_tasks: BackgroundTasks,
     user: AuthContext = Depends(get_current_user),
     tenant_id: str = Depends(require_tenant),
 ):
-    return service.update_contact(tenant_id, user.user_id, contact_id, body.model_dump(), user.is_impersonating)
+    return service.update_contact(
+        tenant_id, user.user_id, contact_id, body.model_dump(), background_tasks, user.is_impersonating
+    )

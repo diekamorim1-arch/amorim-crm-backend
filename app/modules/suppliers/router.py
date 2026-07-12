@@ -8,6 +8,7 @@ from app.modules.suppliers.schemas import (
     PriceUpdate,
     SupplierCreate,
     SupplierOut,
+    SupplierProductBulkCreate,
     SupplierProductCreate,
     SupplierProductOut,
     SupplierProductUpdate,
@@ -44,12 +45,21 @@ def list_products(supplier_id: str, tenant_id: str = Depends(require_tenant)):
 
 @router.post("/suppliers/{supplier_id}/products", response_model=SupplierProductOut)
 def create_product(supplier_id: str, body: SupplierProductCreate, user: AuthContext = Depends(require_role("gestor"))):
-    return service.create_product(user.tenant_id, supplier_id, body.name, body.current_price)
+    return service.create_product(user.tenant_id, supplier_id, body.name, body.current_price, body.colors)
+
+
+@router.post("/suppliers/{supplier_id}/products/bulk", response_model=list[SupplierProductOut])
+def bulk_create_products(
+    supplier_id: str, body: SupplierProductBulkCreate, user: AuthContext = Depends(require_role("gestor"))
+):
+    return service.bulk_create_products(
+        user.tenant_id, supplier_id, [item.model_dump() for item in body.products]
+    )
 
 
 @router.patch("/supplier-products/{product_id}", response_model=SupplierProductOut)
 def update_product(product_id: str, body: SupplierProductUpdate, user: AuthContext = Depends(require_role("gestor"))):
-    return service.update_product(user.tenant_id, product_id, body.name, body.current_price)
+    return service.update_product(user.tenant_id, product_id, body.name, body.current_price, body.colors)
 
 
 @router.patch("/supplier-products/{product_id}/price", response_model=SupplierProductOut)

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import AuthContext
@@ -17,6 +17,7 @@ def list_all(contact_id: str, tenant_id: str = Depends(require_tenant)):
 @router.post("/contacts/{contact_id}/attachments", response_model=AttachmentOut)
 async def create(
     contact_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: AuthContext = Depends(get_current_user),
     tenant_id: str = Depends(require_tenant),
@@ -33,14 +34,16 @@ async def create(
         file.filename or "arquivo",
         file.content_type or "application/octet-stream",
         content,
+        background_tasks,
     )
 
 
 @router.delete("/attachments/{attachment_id}")
 def delete(
     attachment_id: str,
+    background_tasks: BackgroundTasks,
     user: AuthContext = Depends(get_current_user),
     tenant_id: str = Depends(require_tenant),
 ):
-    service.delete_attachment(tenant_id, user.user_id, attachment_id)
+    service.delete_attachment(tenant_id, user.user_id, attachment_id, background_tasks)
     return {"status": "deleted"}

@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from fastapi import BackgroundTasks
+
 from app.core.audit import log_audit_event
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
@@ -37,7 +39,9 @@ def get_contact(tenant_id: str, contact_id: str) -> dict:
     return rows[0]
 
 
-def create_contact(tenant_id: str, user_id: str, data: dict, is_impersonating: bool = False) -> dict:
+def create_contact(
+    tenant_id: str, user_id: str, data: dict, background_tasks: BackgroundTasks, is_impersonating: bool = False
+) -> dict:
     sb = get_service_client()
     owner_id = data.get("owner_id")
     if owner_id is not None:
@@ -51,11 +55,14 @@ def create_contact(tenant_id: str, user_id: str, data: dict, is_impersonating: b
         "last_interaction_at": now,
     }
     contact = sb.table("contacts").insert(payload).execute().data[0]
-    log_audit_event(tenant_id, user_id, "INSERT", "contacts", contact["id"])
+    background_tasks.add_task(log_audit_event, tenant_id, user_id, "INSERT", "contacts", contact["id"])
     return contact
 
 
-def update_contact(tenant_id: str, user_id: str, contact_id: str, patch: dict, is_impersonating: bool = False) -> dict:
+def update_contact(
+    tenant_id: str, user_id: str, contact_id: str, patch: dict, background_tasks: BackgroundTasks,
+    is_impersonating: bool = False,
+) -> dict:
     sb = get_service_client()
     clean_patch = {k: v for k, v in patch.items() if v is not None}
     if not clean_patch:
@@ -72,5 +79,5 @@ def update_contact(tenant_id: str, user_id: str, contact_id: str, patch: dict, i
     )
     if not rows:
         raise AppError(404, "not_found", "Cliente não encontrado.")
-    log_audit_event(tenant_id, user_id, "UPDATE", "contacts", contact_id)
+    background_tasks.add_task(log_audit_event, tenant_id, user_id, "UPDATE", "contacts", contact_id)
     return rows[0]

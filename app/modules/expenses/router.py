@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 
 from app.core.auth import AuthContext
 from app.deps import require_role, require_tenant
@@ -14,11 +14,11 @@ def list_all(tenant_id: str = Depends(require_tenant)):
 
 
 @router.post("", response_model=ExpenseOut)
-def create(body: ExpenseCreate, user: AuthContext = Depends(require_role("gestor"))):
-    return service.create_expense(user.tenant_id, user.user_id, body.description, body.value)
+def create(body: ExpenseCreate, background_tasks: BackgroundTasks, user: AuthContext = Depends(require_role("gestor"))):
+    return service.create_expense(user.tenant_id, user.user_id, body.description, body.value, background_tasks)
 
 
 @router.delete("/{expense_id}")
-def delete(expense_id: str, user: AuthContext = Depends(require_role("gestor"))):
-    service.delete_expense(user.tenant_id, user.user_id, expense_id)
+def delete(expense_id: str, background_tasks: BackgroundTasks, user: AuthContext = Depends(require_role("gestor"))):
+    service.delete_expense(user.tenant_id, user.user_id, expense_id, background_tasks)
     return {"status": "deleted"}

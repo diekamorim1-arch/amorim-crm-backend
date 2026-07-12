@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+from app.modules.contacts.schemas import ContactOut
+
 
 class DealOut(BaseModel):
     id: str
@@ -29,6 +31,13 @@ class LeadCreate(BaseModel):
     product_line: str | None = None
     value: float
     owner_id: str
+    supplier_product_id: str | None = None
+    supplier_value: float | None = None
+
+
+class LeadCreateOut(BaseModel):
+    contact: ContactOut
+    deal: DealOut
 
 
 class DealCreate(BaseModel):

@@ -1,5 +1,7 @@
 import uuid
 
+from fastapi import BackgroundTasks
+
 from app.core.audit import log_audit_event
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
@@ -41,7 +43,8 @@ def list_attachments(tenant_id: str, contact_id: str) -> list[dict]:
 
 
 def create_attachment(
-    tenant_id: str, user_id: str, contact_id: str, file_name: str, file_type: str, content: bytes
+    tenant_id: str, user_id: str, contact_id: str, file_name: str, file_type: str, content: bytes,
+    background_tasks: BackgroundTasks,
 ) -> dict:
     if len(content) > MAX_FILE_BYTES:
         raise AppError(413, "file_too_large", "Arquivo maior que 1,5MB.")
@@ -68,11 +71,11 @@ def create_attachment(
         .execute()
         .data[0]
     )
-    log_audit_event(tenant_id, user_id, "INSERT", "attachments", row["id"])
+    background_tasks.add_task(log_audit_event, tenant_id, user_id, "INSERT", "attachments", row["id"])
     return _with_signed_url(sb, row)
 
 
-def delete_attachment(tenant_id: str, user_id: str, attachment_id: str) -> None:
+def delete_attachment(tenant_id: str, user_id: str, attachment_id: str, background_tasks: BackgroundTasks) -> None:
     sb = get_service_client()
     rows = sb.table("attachments").select("*").eq("tenant_id", tenant_id).eq("id", attachment_id).execute().data
     if not rows:
@@ -80,4 +83,4 @@ def delete_attachment(tenant_id: str, user_id: str, attachment_id: str) -> None:
     row = rows[0]
     sb.storage.from_(BUCKET).remove([row["storage_path"]])
     sb.table("attachments").delete().eq("id", attachment_id).execute()
-    log_audit_event(tenant_id, user_id, "DELETE", "attachments", attachment_id)
+    background_tasks.add_task(log_audit_event, tenant_id, user_id, "DELETE", "attachments", attachment_id)

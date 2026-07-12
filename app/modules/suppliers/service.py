@@ -42,19 +42,40 @@ def list_products(tenant_id: str, supplier_id: str) -> list[dict]:
     return sb.table("supplier_products").select("*").eq("tenant_id", tenant_id).eq("supplier_id", supplier_id).execute().data
 
 
-def create_product(tenant_id: str, supplier_id: str, name: str, current_price: float) -> dict:
+def create_product(tenant_id: str, supplier_id: str, name: str, current_price: float, colors: str | None = None) -> dict:
     sb = get_service_client()
     verify_owned_by_tenant("suppliers", supplier_id, tenant_id, "Fornecedor não encontrado.")
     now = datetime.now(UTC).isoformat()
     return (
         sb.table("supplier_products")
-        .insert({"tenant_id": tenant_id, "supplier_id": supplier_id, "name": name, "current_price": current_price, "updated_at": now})
+        .insert(
+            {
+                "tenant_id": tenant_id, "supplier_id": supplier_id, "name": name, "current_price": current_price,
+                "colors": colors, "updated_at": now,
+            }
+        )
         .execute()
         .data[0]
     )
 
 
-def update_product(tenant_id: str, product_id: str, name: str | None, price: float | None) -> dict:
+def bulk_create_products(tenant_id: str, supplier_id: str, items: list[dict]) -> list[dict]:
+    sb = get_service_client()
+    verify_owned_by_tenant("suppliers", supplier_id, tenant_id, "Fornecedor não encontrado.")
+    if not items:
+        return []
+    now = datetime.now(UTC).isoformat()
+    rows = [
+        {
+            "tenant_id": tenant_id, "supplier_id": supplier_id, "name": item["name"],
+            "current_price": item["current_price"], "colors": item.get("colors"), "updated_at": now,
+        }
+        for item in items
+    ]
+    return sb.table("supplier_products").insert(rows).execute().data
+
+
+def update_product(tenant_id: str, product_id: str, name: str | None, price: float | None, colors: str | None = None) -> dict:
     sb = get_service_client()
     rows = sb.table("supplier_products").select("*").eq("tenant_id", tenant_id).eq("id", product_id).execute().data
     if not rows:
@@ -64,6 +85,8 @@ def update_product(tenant_id: str, product_id: str, name: str | None, price: flo
     patch: dict = {}
     if name is not None:
         patch["name"] = name
+    if colors is not None:
+        patch["colors"] = colors
     # Mesma regra do reducer local que este endpoint substitui: só grava uma
     # entrada em supplier_price_changes quando o preço realmente muda, não a
     # cada edição do produto (ex.: editar só o nome não deveria poluir o

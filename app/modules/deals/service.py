@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from fastapi import BackgroundTasks
+
 from app.core.audit import log_audit_event
 from app.core.errors import AppError
 from app.core.supabase_client import get_service_client
@@ -27,12 +29,26 @@ def list_deals(tenant_id: str, stage: str | None, outcome: str | None, owner_id:
 
 def create_lead(
     tenant_id: str, actor_user_id: str, name: str, whatsapp: str, origin: str,
-    product_line: str | None, value: float, owner_id: str, is_impersonating: bool = False,
+    product_line: str | None, value: float, owner_id: str,
+    supplier_product_id: str | None, supplier_value: float | None,
+    background_tasks: BackgroundTasks, is_impersonating: bool = False,
 ) -> dict:
     sb = get_service_client()
     verify_owner_or_self(owner_id, tenant_id, actor_user_id, is_impersonating, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     product_label = PRODUCT_LINE_LABELS.get(product_line, "Novo negócio")
+    if supplier_product_id is not None:
+        product_rows = (
+            sb.table("supplier_products")
+            .select("id, name")
+            .eq("tenant_id", tenant_id)
+            .eq("id", supplier_product_id)
+            .execute()
+            .data
+        )
+        if not product_rows:
+            raise AppError(404, "not_found", "Produto não encontrado.")
+        product_label = product_rows[0]["name"]
 
     contact = (
         sb.table("contacts")
@@ -46,7 +62,7 @@ def create_lead(
         .execute()
         .data[0]
     )
-    log_audit_event(tenant_id, actor_user_id, "INSERT", "contacts", contact["id"])
+    background_tasks.add_task(log_audit_event, tenant_id, actor_user_id, "INSERT", "contacts", contact["id"])
 
     deal = (
         sb.table("deals")
@@ -55,12 +71,13 @@ def create_lead(
                 "tenant_id": tenant_id, "contact_id": contact["id"], "title": product_label, "products": product_label,
                 "value": value, "payment": "pix", "stage": "novo_lead", "outcome": "aberto",
                 "owner_id": owner_id, "stage_changed_at": now,
+                "supplier_product_id": supplier_product_id, "supplier_value": supplier_value,
             }
         )
         .execute()
         .data[0]
     )
-    log_audit_event(tenant_id, actor_user_id, "INSERT", "deals", deal["id"])
+    background_tasks.add_task(log_audit_event, tenant_id, actor_user_id, "INSERT", "deals", deal["id"])
 
     sb.table("activities").insert(
         {
@@ -68,17 +85,19 @@ def create_lead(
             "type": "mudanca_estagio", "description": f"Novo lead criado: {product_label}.",
         }
     ).execute()
-    return deal
+    return {"contact": contact, "deal": deal}
 
 
-def create_deal(tenant_id: str, actor_user_id: str, data: dict, is_impersonating: bool = False) -> dict:
+def create_deal(
+    tenant_id: str, actor_user_id: str, data: dict, background_tasks: BackgroundTasks, is_impersonating: bool = False
+) -> dict:
     sb = get_service_client()
     verify_owned_by_tenant("contacts", data["contact_id"], tenant_id, "Cliente não encontrado.")
     verify_owner_or_self(data["owner_id"], tenant_id, actor_user_id, is_impersonating, "Responsável não encontrado.")
     now = datetime.now(UTC).isoformat()
     payload = {**data, "tenant_id": tenant_id, "stage": "novo_lead", "outcome": "aberto", "stage_changed_at": now}
     deal = sb.table("deals").insert(payload).execute().data[0]
-    log_audit_event(tenant_id, actor_user_id, "INSERT", "deals", deal["id"])
+    background_tasks.add_task(log_audit_event, tenant_id, actor_user_id, "INSERT", "deals", deal["id"])
     return deal
 
 
@@ -89,18 +108,18 @@ def _get_deal(sb, tenant_id: str, deal_id: str) -> dict:
     return rows[0]
 
 
-def update_deal(tenant_id: str, actor_user_id: str, deal_id: str, patch: dict) -> dict:
+def update_deal(tenant_id: str, actor_user_id: str, deal_id: str, patch: dict, background_tasks: BackgroundTasks) -> dict:
     sb = get_service_client()
     clean_patch = {k: v for k, v in patch.items() if v is not None}
     if not clean_patch:
         raise AppError(400, "empty_patch", "Nenhum campo para atualizar.")
     _get_deal(sb, tenant_id, deal_id)
     deal = sb.table("deals").update(clean_patch).eq("id", deal_id).execute().data[0]
-    log_audit_event(tenant_id, actor_user_id, "UPDATE", "deals", deal_id)
+    background_tasks.add_task(log_audit_event, tenant_id, actor_user_id, "UPDATE", "deals", deal_id)
     return deal
 
 
-def move_deal(tenant_id: str, deal_id: str, stage: str, user_id: str) -> dict:
+def move_deal(tenant_id: str, deal_id: str, stage: str, user_id: str, background_tasks: BackgroundTasks) -> dict:
     sb = get_service_client()
     deal = _get_deal(sb, tenant_id, deal_id)
     if deal["stage"] == stage:
@@ -112,7 +131,7 @@ def move_deal(tenant_id: str, deal_id: str, stage: str, user_id: str) -> dict:
     if is_win:
         patch["outcome"] = "ganho"
     updated = sb.table("deals").update(patch).eq("id", deal_id).execute().data[0]
-    log_audit_event(tenant_id, user_id, "UPDATE", "deals", deal_id)
+    background_tasks.add_task(log_audit_event, tenant_id, user_id, "UPDATE", "deals", deal_id)
 
     sb.table("activities").insert(
         {
@@ -139,12 +158,12 @@ def move_deal(tenant_id: str, deal_id: str, stage: str, user_id: str) -> dict:
         )
         journey_status = "recorrente" if won_count >= 2 else "cliente"
         sb.table("contacts").update({"journey_status": journey_status}).eq("id", deal["contact_id"]).execute()
-        log_audit_event(tenant_id, user_id, "UPDATE", "contacts", deal["contact_id"])
+        background_tasks.add_task(log_audit_event, tenant_id, user_id, "UPDATE", "contacts", deal["contact_id"])
 
     return updated
 
 
-def delete_deal(tenant_id: str, actor_user_id: str, deal_id: str) -> None:
+def delete_deal(tenant_id: str, actor_user_id: str, deal_id: str, background_tasks: BackgroundTasks) -> None:
     sb = get_service_client()
     _get_deal(sb, tenant_id, deal_id)
     # activities/appointments/attachments têm deal_id opcional e FK NO ACTION
@@ -156,20 +175,21 @@ def delete_deal(tenant_id: str, actor_user_id: str, deal_id: str) -> None:
     sb.table("appointments").update({"deal_id": None}).eq("tenant_id", tenant_id).eq("deal_id", deal_id).execute()
     sb.table("attachments").update({"deal_id": None}).eq("tenant_id", tenant_id).eq("deal_id", deal_id).execute()
     sb.table("deals").delete().eq("tenant_id", tenant_id).eq("id", deal_id).execute()
-    log_audit_event(tenant_id, actor_user_id, "DELETE", "deals", deal_id)
+    background_tasks.add_task(log_audit_event, tenant_id, actor_user_id, "DELETE", "deals", deal_id)
 
 
-def mark_lost(tenant_id: str, actor_user_id: str, deal_id: str, reason: str) -> dict:
+def mark_lost(tenant_id: str, actor_user_id: str, deal_id: str, reason: str, background_tasks: BackgroundTasks) -> dict:
     sb = get_service_client()
     _get_deal(sb, tenant_id, deal_id)
     deal = sb.table("deals").update({"outcome": "perdido", "loss_reason": reason}).eq("id", deal_id).execute().data[0]
-    log_audit_event(tenant_id, actor_user_id, "UPDATE", "deals", deal_id)
+    background_tasks.add_task(log_audit_event, tenant_id, actor_user_id, "UPDATE", "deals", deal_id)
     return deal
 
 
 def update_financials(
     tenant_id: str, actor_user_id: str, deal_id: str,
     supplier_product_id: str | None, supplier_value: float, gift_value: float, freight_value: float,
+    background_tasks: BackgroundTasks,
 ) -> dict:
     sb = get_service_client()
     _get_deal(sb, tenant_id, deal_id)
@@ -182,5 +202,5 @@ def update_financials(
         "freight_value": freight_value,
     }
     deal = sb.table("deals").update(patch).eq("id", deal_id).execute().data[0]
-    log_audit_event(tenant_id, actor_user_id, "UPDATE", "deals", deal_id)
+    background_tasks.add_task(log_audit_event, tenant_id, actor_user_id, "UPDATE", "deals", deal_id)
     return deal

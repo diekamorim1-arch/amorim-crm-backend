@@ -34,17 +34,30 @@ class SupplierProductOut(BaseModel):
     supplier_id: str
     name: str
     current_price: float
+    colors: str | None = None
     updated_at: str
 
 
 class SupplierProductCreate(BaseModel):
     name: str
     current_price: float
+    colors: str | None = None
 
 
 class SupplierProductUpdate(BaseModel):
     name: str | None = None
     current_price: float | None = None
+    colors: str | None = None
+
+
+class SupplierProductBulkItem(BaseModel):
+    name: str
+    current_price: float
+    colors: str | None = None
+
+
+class SupplierProductBulkCreate(BaseModel):
+    products: list[SupplierProductBulkItem]
 
 
 class PriceUpdate(BaseModel):
