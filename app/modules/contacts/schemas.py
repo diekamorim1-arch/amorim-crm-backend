@@ -50,3 +50,10 @@ class ContactUpdate(BaseModel):
     interests: list[str] | None = None
     tags: list[str] | None = None
     owner_id: str | None = None
+
+
+class ContactDeletionSummary(BaseModel):
+    deals: int
+    appointments: int
+    activities: int
+    attachments: int

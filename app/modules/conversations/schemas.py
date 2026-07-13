@@ -8,6 +8,7 @@ class ConversationOut(BaseModel):
     assignee_id: str | None = None
     status: str
     unread: int
+    created_at: str
 
 
 class ConversationCreate(BaseModel):

@@ -240,6 +240,139 @@ def test_buscar_contato_inexistente_404(client, gestor_token):
     assert response.status_code == 404
 
 
+def test_gestor_exclui_contato_cascateia_tudo(client, gestor_token, gestor_user_id):
+    """deals/appointments/activities/conversations/attachments têm contact_id
+    NOT NULL — diferente de excluir deal (que só desvincula, ver
+    test_deals.py), excluir um contato precisa apagar de verdade tudo que só
+    existe por causa dele."""
+    sb = get_service_client()
+    contact = _create_contact(client, gestor_token, gestor_user_id, whatsapp="+5511966665555")
+
+    deal = client.post(
+        "/api/v1/deals",
+        json={
+            "contact_id": contact["id"], "title": "Negócio Teste", "products": "iPhone 15",
+            "value": 5000, "payment": "pix", "owner_id": gestor_user_id,
+        },
+        headers=auth_headers(gestor_token),
+    ).json()
+    appointment = client.post(
+        "/api/v1/appointments",
+        json={
+            "contact_id": contact["id"], "deal_id": deal["id"], "type": "atendimento",
+            "starts_at": "2026-09-01T10:00:00Z", "ends_at": "2026-09-01T10:30:00Z", "owner_id": gestor_user_id,
+        },
+        headers=auth_headers(gestor_token),
+    ).json()
+    activity = sb.table("activities").insert(
+        {
+            "tenant_id": contact["tenant_id"], "contact_id": contact["id"], "deal_id": deal["id"],
+            "user_id": gestor_user_id, "type": "mensagem", "description": "Nota de teste",
+        }
+    ).execute().data[0]
+    conversation = client.post(
+        "/api/v1/conversations", json={"contact_id": contact["id"]}, headers=auth_headers(gestor_token)
+    ).json()
+    message = client.post(
+        f"/api/v1/conversations/{conversation['id']}/messages", json={"text": "Oi"}, headers=auth_headers(gestor_token)
+    ).json()
+    attachment = client.post(
+        f"/api/v1/contacts/{contact['id']}/attachments",
+        files={"file": ("comprovante.png", b"fake-bytes", "image/png")},
+        headers=auth_headers(gestor_token),
+    ).json()
+
+    response = client.delete(f"/api/v1/contacts/{contact['id']}", headers=auth_headers(gestor_token))
+    assert response.status_code == 200
+
+    assert sb.table("contacts").select("id").eq("id", contact["id"]).execute().data == []
+    assert sb.table("deals").select("id").eq("id", deal["id"]).execute().data == []
+    assert sb.table("appointments").select("id").eq("id", appointment["id"]).execute().data == []
+    assert sb.table("activities").select("id").eq("id", activity["id"]).execute().data == []
+    assert sb.table("conversations").select("id").eq("id", conversation["id"]).execute().data == []
+    assert sb.table("messages").select("id").eq("id", message["id"]).execute().data == []
+    assert sb.table("attachments").select("id").eq("id", attachment["id"]).execute().data == []
+
+
+def test_gestor_ve_contagem_de_exclusao_do_contato(client, gestor_token, gestor_user_id):
+    contact = _create_contact(client, gestor_token, gestor_user_id, whatsapp="+5511966664444")
+    try:
+        deal = client.post(
+            "/api/v1/deals",
+            json={
+                "contact_id": contact["id"], "title": "Negócio", "products": "iPad",
+                "value": 3000, "payment": "pix", "owner_id": gestor_user_id,
+            },
+            headers=auth_headers(gestor_token),
+        ).json()
+        try:
+            summary = client.get(
+                f"/api/v1/contacts/{contact['id']}/deletion-summary", headers=auth_headers(gestor_token)
+            )
+            assert summary.status_code == 200
+            body = summary.json()
+            assert body["deals"] == 1
+            assert body["appointments"] == 0
+            assert body["activities"] == 0
+            assert body["attachments"] == 0
+        finally:
+            get_service_client().table("deals").delete().eq("id", deal["id"]).execute()
+    finally:
+        _delete_contact(contact["id"])
+
+
+def test_atendente_nao_exclui_contato(client, atendente_token, atendente_user_id):
+    contact = _create_contact(client, atendente_token, atendente_user_id, whatsapp="+5511966663333")
+    try:
+        response = client.delete(f"/api/v1/contacts/{contact['id']}", headers=auth_headers(atendente_token))
+        assert response.status_code == 403
+    finally:
+        _delete_contact(contact["id"])
+
+
+def test_excluir_contato_inexistente_404(client, gestor_token):
+    response = client.delete(
+        "/api/v1/contacts/00000000-0000-0000-0000-000000000000", headers=auth_headers(gestor_token)
+    )
+    assert response.status_code == 404
+
+
+def test_nao_exclui_contato_de_outro_tenant(client, gestor_token):
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert(
+        {"name": "Loja Alheia Contacts Delete", "slug": f"alheia-cd-{uuid.uuid4().hex[:8]}"}
+    ).execute().data[0]
+    try:
+        foreign_token, foreign_user_id = _create_user_and_sign_in(sb, foreign_tenant["id"], "gestor")
+        try:
+            foreign_contact = (
+                sb.table("contacts")
+                .insert(
+                    {
+                        "tenant_id": foreign_tenant["id"], "name": "Contato Alheio",
+                        "whatsapp": "+5511900008888", "origin": "outro", "owner_id": foreign_user_id,
+                    }
+                )
+                .execute()
+                .data[0]
+            )
+            try:
+                response = client.delete(
+                    f"/api/v1/contacts/{foreign_contact['id']}", headers=auth_headers(gestor_token)
+                )
+                assert response.status_code == 404
+
+                survives = sb.table("contacts").select("id").eq("id", foreign_contact["id"]).execute().data
+                assert len(survives) == 1
+            finally:
+                sb.table("contacts").delete().eq("id", foreign_contact["id"]).execute()
+        finally:
+            sb.table("user_profiles").delete().eq("id", foreign_user_id).execute()
+            sb.auth.admin.delete_user(foreign_user_id)
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+
+
 def test_admin_impersonando_cria_contato_como_proprio_responsavel(client, admin_token, admin_user_id, test_tenant):
     """Mesma exceção de deals (verify_owner_or_self): admin_saas não tem linha
     em user_profiles vinculada a este tenant, mas pode se atribuir contatos
