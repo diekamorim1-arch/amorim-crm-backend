@@ -103,6 +103,22 @@ def update_product(tenant_id: str, product_id: str, name: str | None, price: flo
     return sb.table("supplier_products").update(patch).eq("id", product_id).execute().data[0]
 
 
+def delete_product(tenant_id: str, product_id: str) -> None:
+    sb = get_service_client()
+    rows = sb.table("supplier_products").select("id").eq("tenant_id", tenant_id).eq("id", product_id).execute().data
+    if not rows:
+        raise AppError(404, "not_found", "Produto não encontrado.")
+    # deals.supplier_product_id é opcional e FK NO ACTION (não CASCADE) pra
+    # supplier_products — sem desvincular antes, o DELETE abaixo estouraria
+    # uma violação de FK crua em vez de simplesmente apagar o produto. O
+    # negócio em si sobrevive, só deixa de referenciar um produto específico.
+    sb.table("deals").update({"supplier_product_id": None}).eq("tenant_id", tenant_id).eq(
+        "supplier_product_id", product_id
+    ).execute()
+    sb.table("supplier_price_changes").delete().eq("tenant_id", tenant_id).eq("supplier_product_id", product_id).execute()
+    sb.table("supplier_products").delete().eq("tenant_id", tenant_id).eq("id", product_id).execute()
+
+
 def update_price(tenant_id: str, product_id: str, price: float) -> dict:
     sb = get_service_client()
     rows = sb.table("supplier_products").select("id").eq("tenant_id", tenant_id).eq("id", product_id).execute().data

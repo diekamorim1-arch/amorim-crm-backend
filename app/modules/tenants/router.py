@@ -8,6 +8,7 @@ from app.modules.tenants.schemas import (
     ImpersonateResponse,
     TenantBillingUpdate,
     TenantCreate,
+    TenantDeletionSummary,
     TenantOut,
     TenantSettingsUpdate,
     TenantUpdate,
@@ -48,6 +49,11 @@ def update_settings(tenant_id: str, body: TenantSettingsUpdate, user: AuthContex
 @router.patch("/{tenant_id}/billing", response_model=TenantOut)
 def update_billing(tenant_id: str, body: TenantBillingUpdate, _: AuthContext = Depends(require_role("admin_saas"))):
     return service.update_billing(tenant_id, body.billing_status, body.plan_expires_at)
+
+
+@router.get("/{tenant_id}/deletion-summary", response_model=TenantDeletionSummary)
+def deletion_summary(tenant_id: str, _: AuthContext = Depends(require_role("admin_saas"))):
+    return service.get_tenant_deletion_summary(tenant_id)
 
 
 @router.delete("/{tenant_id}")

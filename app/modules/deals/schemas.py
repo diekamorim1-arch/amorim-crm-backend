@@ -56,6 +56,7 @@ class DealUpdate(BaseModel):
     products: str | None = None
     value: float | None = None
     payment: str | None = None
+    stage_changed_at: str | None = None
 
 
 class MoveDealBody(BaseModel):

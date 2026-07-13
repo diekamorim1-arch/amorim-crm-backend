@@ -85,41 +85,53 @@ def check_tenant_for_impersonation(tenant_id: str) -> dict:
     return rows[0]
 
 
+def get_tenant_deletion_summary(tenant_id: str) -> dict:
+    sb = get_service_client()
+    if not sb.table("tenants").select("id").eq("id", tenant_id).execute().data:
+        raise AppError(404, "not_found", "Loja não encontrada.")
+    return {
+        "contacts": sb.table("contacts").select("id", count="exact").eq("tenant_id", tenant_id).execute().count,
+        "deals": sb.table("deals").select("id", count="exact").eq("tenant_id", tenant_id).execute().count,
+        "suppliers": sb.table("suppliers").select("id", count="exact").eq("tenant_id", tenant_id).execute().count,
+        "users": sb.table("user_profiles").select("id", count="exact").eq("tenant_id", tenant_id).execute().count,
+    }
+
+
 def delete_tenant(tenant_id: str) -> None:
     sb = get_service_client()
     if not sb.table("tenants").select("id").eq("id", tenant_id).execute().data:
         raise AppError(404, "not_found", "Loja não encontrada.")
 
-    # Todas as FKs pra tenants são NO ACTION (não CASCADE) — sem essas
-    # checagens, um DELETE com qualquer linha vinculada estouraria um erro de
-    # violação de FK do Postgres (500 cru) em vez de um 409 claro. contacts/
-    # deals/suppliers cobrem indiretamente activities/appointments/
-    # attachments/conversations/messages/supplier_products/
-    # supplier_price_changes (todos exigem um contact_id ou supplier_id, que
-    # só existe se já houver um contato/fornecedor real). connections não
-    # depende de contact_id, então precisa de checagem própria — dá pra
-    # conectar o WhatsApp antes de cadastrar qualquer cliente.
-    linked_contact = sb.table("contacts").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
-    linked_deal = sb.table("deals").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
-    linked_supplier = sb.table("suppliers").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
-    linked_connection = sb.table("connections").select("id").eq("tenant_id", tenant_id).limit(1).execute().data
-    # create_tenant já cria um gestor junto com a loja — uma loja "vazia" tem
-    # exatamente esse 1 perfil, nunca 0. Mais de 1 significa que alguém já
-    # convidou gente pra essa loja, ou seja, ela já está em uso de verdade.
-    user_profiles = sb.table("user_profiles").select("id").eq("tenant_id", tenant_id).execute().data
-
-    if linked_contact or linked_deal or linked_supplier or linked_connection or len(user_profiles) > 1:
-        raise AppError(
-            409,
-            "tenant_has_links",
-            "Esta loja já tem dados reais (clientes, negócios, fornecedores, WhatsApp conectado ou mais "
-            "de um usuário) — suspenda em vez de excluir.",
-        )
+    # Exclusão intencional e definitiva: em vez de bloquear quando a loja já
+    # tem dado real (o aviso de risco com a contagem é responsabilidade do
+    # frontend, via get_tenant_deletion_summary, antes de chamar isto),
+    # cascateia a remoção de tudo vinculado. Todas as FKs pra tenants (e
+    # entre essas tabelas) são NO ACTION, não CASCADE — a ordem importa:
+    # filhos antes de pais, e user_profiles por último, já que
+    # deals/contacts/connections/expenses/attachments referenciam
+    # user_profiles.id (owner_id/user_id/uploaded_by) e quebrariam se o
+    # perfil fosse apagado antes.
+    sb.table("supplier_price_changes").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("attachments").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("appointments").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("activities").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("messages").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("conversations").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("supplier_products").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("suppliers").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("deals").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("contacts").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("connections").delete().eq("tenant_id", tenant_id).execute()
+    sb.table("expenses").delete().eq("tenant_id", tenant_id).execute()
 
     # user_profiles.id referencia auth.users(id) on delete cascade — apagar o
-    # usuário via Auth Admin já remove a linha de user_profiles junto.
+    # usuário via Auth Admin já remove a linha de user_profiles (e a conta de
+    # login) junto, em vez de deixar uma conta órfã apontando pra um tenant
+    # que não existe mais.
+    user_profiles = sb.table("user_profiles").select("id").eq("tenant_id", tenant_id).execute().data
     for profile in user_profiles:
         sb.auth.admin.delete_user(profile["id"])
+
     sb.table("tenants").delete().eq("id", tenant_id).execute()
 
 

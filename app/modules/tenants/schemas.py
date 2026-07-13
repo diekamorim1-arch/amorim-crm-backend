@@ -45,3 +45,10 @@ class TenantBillingUpdate(BaseModel):
 class ImpersonateResponse(BaseModel):
     tenant_id: str
     tenant_name: str
+
+
+class TenantDeletionSummary(BaseModel):
+    contacts: int
+    deals: int
+    suppliers: int
+    users: int

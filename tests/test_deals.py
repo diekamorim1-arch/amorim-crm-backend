@@ -329,6 +329,22 @@ def test_criar_deal_para_contato_existente_e_atualizar(client, gestor_token, ges
         get_service_client().table("contacts").delete().eq("id", contact["id"]).execute()
 
 
+def test_atualizar_deal_move_para_outro_mes_via_stage_changed_at(client, gestor_token, gestor_user_id):
+    """stage_changed_at é o campo que dashboard/service.py::get_monthly_detail/
+    get_monthly_history usam pra decidir em qual mês do histórico um negócio
+    ganho aparece — "mover de mês" na prática é editar esse campo."""
+    deal = _create_lead(client, gestor_token, gestor_user_id, whatsapp="+5511955554444")
+    try:
+        new_date = "2026-03-15T12:00:00+00:00"
+        response = client.patch(
+            f"/api/v1/deals/{deal['id']}", json={"stage_changed_at": new_date}, headers=auth_headers(gestor_token)
+        )
+        assert response.status_code == 200
+        assert response.json()["stage_changed_at"] == new_date
+    finally:
+        _cleanup_lead(deal["contact_id"])
+
+
 def test_mover_deal_inexistente_404(client, gestor_token):
     response = client.post(
         "/api/v1/deals/00000000-0000-0000-0000-000000000000/move",

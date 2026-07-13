@@ -140,10 +140,14 @@ def test_gestor_nao_exclui_loja(client, gestor_token, test_tenant):
     assert response.status_code == 403
 
 
-def test_admin_nao_exclui_loja_com_contato(client, admin_token):
+def test_admin_exclui_loja_com_dado_real_cascateia_tudo(client, admin_token):
+    """delete_tenant não bloqueia mais quando a loja já tem dado real — o
+    aviso de risco é responsabilidade do frontend (via deletion-summary).
+    Confirma que negócio, cliente, fornecedor e produto vinculados somem
+    junto com a loja, sem sobrar nenhuma linha órfã."""
     sb = get_service_client()
     created = client.post(
-        "/api/v1/tenants", json={"name": "Loja Com Cliente"}, headers=auth_headers(admin_token)
+        "/api/v1/tenants", json={"name": "Loja Com Dado Real"}, headers=auth_headers(admin_token)
     ).json()
     gestor_id = sb.table("user_profiles").select("id").eq("tenant_id", created["id"]).execute().data[0]["id"]
     contact = sb.table("contacts").insert(
@@ -152,31 +156,63 @@ def test_admin_nao_exclui_loja_com_contato(client, admin_token):
             "owner_id": gestor_id, "origin": "outro",
         }
     ).execute().data[0]
-    try:
-        response = client.delete(f"/api/v1/tenants/{created['id']}", headers=auth_headers(admin_token))
-        assert response.status_code == 409
-        assert sb.table("tenants").select("id").eq("id", created["id"]).execute().data != []
-    finally:
-        sb.table("contacts").delete().eq("id", contact["id"]).execute()
-        sb.auth.admin.delete_user(gestor_id)
-        sb.table("tenants").delete().eq("id", created["id"]).execute()
+    deal = sb.table("deals").insert(
+        {
+            "tenant_id": created["id"], "contact_id": contact["id"], "title": "Negócio Real", "products": "iPhone",
+            "value": 1000, "payment": "pix", "stage": "novo_lead", "outcome": "aberto", "owner_id": gestor_id,
+        }
+    ).execute().data[0]
+    supplier = sb.table("suppliers").insert(
+        {"tenant_id": created["id"], "name": "Fornecedor Real", "whatsapp": "+5511900000020"}
+    ).execute().data[0]
+
+    response = client.delete(f"/api/v1/tenants/{created['id']}", headers=auth_headers(admin_token))
+    assert response.status_code == 200
+
+    assert sb.table("tenants").select("id").eq("id", created["id"]).execute().data == []
+    assert sb.table("contacts").select("id").eq("id", contact["id"]).execute().data == []
+    assert sb.table("deals").select("id").eq("id", deal["id"]).execute().data == []
+    assert sb.table("suppliers").select("id").eq("id", supplier["id"]).execute().data == []
+    assert sb.table("user_profiles").select("id").eq("id", gestor_id).execute().data == []
 
 
-def test_admin_nao_exclui_loja_com_mais_de_um_usuario(client, admin_token):
+def test_admin_exclui_loja_com_mais_de_um_usuario_apaga_todos_os_perfis(client, admin_token):
     sb = get_service_client()
     created = client.post(
         "/api/v1/tenants", json={"name": "Loja Com Equipe"}, headers=auth_headers(admin_token)
     ).json()
     second_token, second_user_id = _create_user_and_sign_in(sb, created["id"], "atendente")
+
+    response = client.delete(f"/api/v1/tenants/{created['id']}", headers=auth_headers(admin_token))
+    assert response.status_code == 200
+
+    assert sb.table("tenants").select("id").eq("id", created["id"]).execute().data == []
+    assert sb.table("user_profiles").select("id").eq("tenant_id", created["id"]).execute().data == []
+    assert sb.table("user_profiles").select("id").eq("id", second_user_id).execute().data == []
+
+
+def test_deletion_summary_conta_dados_vinculados(client, admin_token, gestor_token, test_tenant, gestor_user_id):
+    contact = get_service_client().table("contacts").insert(
+        {
+            "tenant_id": test_tenant["id"], "name": "Cliente Summary", "whatsapp": "+5511900000030",
+            "owner_id": gestor_user_id, "origin": "outro",
+        }
+    ).execute().data[0]
     try:
-        response = client.delete(f"/api/v1/tenants/{created['id']}", headers=auth_headers(admin_token))
-        assert response.status_code == 409
+        response = client.get(
+            f"/api/v1/tenants/{test_tenant['id']}/deletion-summary", headers=auth_headers(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["contacts"] >= 1
+        assert body["users"] >= 1
+
+        forbidden = client.get(
+            f"/api/v1/tenants/{test_tenant['id']}/deletion-summary", headers=auth_headers(gestor_token)
+        )
+        assert forbidden.status_code == 403
     finally:
-        sb.table("user_profiles").delete().eq("id", second_user_id).execute()
-        sb.auth.admin.delete_user(second_user_id)
-        for row in sb.table("user_profiles").select("id").eq("tenant_id", created["id"]).execute().data:
-            sb.auth.admin.delete_user(row["id"])
-        sb.table("tenants").delete().eq("id", created["id"]).execute()
+        get_service_client().table("contacts").delete().eq("id", contact["id"]).execute()
 
 
 def test_admin_exclui_loja_inexistente_404(client, admin_token):

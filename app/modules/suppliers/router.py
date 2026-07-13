@@ -62,6 +62,12 @@ def update_product(product_id: str, body: SupplierProductUpdate, user: AuthConte
     return service.update_product(user.tenant_id, product_id, body.name, body.current_price, body.colors)
 
 
+@router.delete("/supplier-products/{product_id}")
+def delete_product(product_id: str, user: AuthContext = Depends(require_role("gestor"))):
+    service.delete_product(user.tenant_id, product_id)
+    return {"status": "deleted"}
+
+
 @router.patch("/supplier-products/{product_id}/price", response_model=SupplierProductOut)
 def update_price(product_id: str, body: PriceUpdate, user: AuthContext = Depends(require_role("gestor"))):
     return service.update_price(user.tenant_id, product_id, body.price)
