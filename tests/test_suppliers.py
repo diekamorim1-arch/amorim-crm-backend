@@ -218,6 +218,94 @@ def test_excluir_produto_inexistente_404(client, gestor_token):
     assert response.status_code == 404
 
 
+def test_gestor_exclui_fornecedor_cascateia_produtos_e_desvincula_deal(client, gestor_token, gestor_user_id):
+    """Excluir o fornecedor precisa apagar os produtos e o histórico de
+    preço dele, e desvincular (não bloquear) negócios que já referenciam um
+    desses produtos — supplier_value/gift_value/freight_value no negócio já
+    são um snapshot financeiro gravado, não uma referência viva."""
+    sb = get_service_client()
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944440404")
+    product = _create_product(client, gestor_token, supplier["id"], current_price=2500)
+    client.patch(
+        f"/api/v1/supplier-products/{product['id']}/price", json={"price": 2700}, headers=auth_headers(gestor_token)
+    )
+    contact = sb.table("contacts").insert(
+        {
+            "tenant_id": supplier["tenant_id"], "name": "Cliente Fornecedor", "whatsapp": "+5511900000050",
+            "owner_id": gestor_user_id, "origin": "outro",
+        }
+    ).execute().data[0]
+    deal = sb.table("deals").insert(
+        {
+            "tenant_id": supplier["tenant_id"], "contact_id": contact["id"], "title": "Negócio Fornecedor",
+            "products": product["name"], "value": 2700, "payment": "pix", "stage": "novo_lead",
+            "outcome": "aberto", "owner_id": gestor_user_id, "supplier_product_id": product["id"],
+        }
+    ).execute().data[0]
+
+    response = client.delete(f"/api/v1/suppliers/{supplier['id']}", headers=auth_headers(gestor_token))
+    assert response.status_code == 200
+
+    assert sb.table("suppliers").select("id").eq("id", supplier["id"]).execute().data == []
+    assert sb.table("supplier_products").select("id").eq("id", product["id"]).execute().data == []
+    assert (
+        sb.table("supplier_price_changes").select("id").eq("supplier_product_id", product["id"]).execute().data == []
+    )
+    surviving_deal = sb.table("deals").select("supplier_product_id", "value").eq("id", deal["id"]).execute().data[0]
+    assert surviving_deal["supplier_product_id"] is None
+    assert surviving_deal["value"] == 2700
+
+    sb.table("deals").delete().eq("id", deal["id"]).execute()
+    sb.table("contacts").delete().eq("id", contact["id"]).execute()
+
+
+def test_gestor_exclui_fornecedor_sem_produtos(client, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944440505")
+    response = client.delete(f"/api/v1/suppliers/{supplier['id']}", headers=auth_headers(gestor_token))
+    assert response.status_code == 200
+    assert (
+        get_service_client().table("suppliers").select("id").eq("id", supplier["id"]).execute().data == []
+    )
+
+
+def test_atendente_nao_exclui_fornecedor(client, atendente_token, gestor_token):
+    supplier = _create_supplier(client, gestor_token, whatsapp="+5511944440606")
+    try:
+        response = client.delete(f"/api/v1/suppliers/{supplier['id']}", headers=auth_headers(atendente_token))
+        assert response.status_code == 403
+    finally:
+        _cleanup_supplier(supplier["id"])
+
+
+def test_excluir_fornecedor_inexistente_404(client, gestor_token):
+    response = client.delete(
+        "/api/v1/suppliers/00000000-0000-0000-0000-000000000000", headers=auth_headers(gestor_token)
+    )
+    assert response.status_code == 404
+
+
+def test_nao_exclui_fornecedor_de_outro_tenant(client, gestor_token):
+    sb = get_service_client()
+    foreign_tenant = sb.table("tenants").insert(
+        {"name": "Loja Alheia Fornecedor", "slug": f"alheia-forn-{uuid.uuid4().hex[:8]}"}
+    ).execute().data[0]
+    try:
+        foreign_supplier = (
+            sb.table("suppliers")
+            .insert({"tenant_id": foreign_tenant["id"], "name": "Fornecedor Alheio Excluir", "whatsapp": "+5511900000060"})
+            .execute()
+            .data[0]
+        )
+        try:
+            response = client.delete(f"/api/v1/suppliers/{foreign_supplier['id']}", headers=auth_headers(gestor_token))
+            assert response.status_code == 404
+            assert sb.table("suppliers").select("id").eq("id", foreign_supplier["id"]).execute().data != []
+        finally:
+            sb.table("suppliers").delete().eq("id", foreign_supplier["id"]).execute()
+    finally:
+        sb.table("tenants").delete().eq("id", foreign_tenant["id"]).execute()
+
+
 def test_gestor_atualiza_fornecedor_com_patch_parcial(client, gestor_token):
     supplier = _create_supplier(
         client, gestor_token, whatsapp="+5511944442222", contact_name="Joao", email="joao@fornecedor.com"

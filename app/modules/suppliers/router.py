@@ -38,6 +38,12 @@ def update(supplier_id: str, body: SupplierUpdate, user: AuthContext = Depends(r
     return service.update_supplier(user.tenant_id, supplier_id, body.model_dump())
 
 
+@router.delete("/suppliers/{supplier_id}")
+def delete_supplier(supplier_id: str, user: AuthContext = Depends(require_role("gestor"))):
+    service.delete_supplier(user.tenant_id, supplier_id)
+    return {"status": "deleted"}
+
+
 @router.get("/suppliers/{supplier_id}/products", response_model=list[SupplierProductOut])
 def list_products(supplier_id: str, tenant_id: str = Depends(require_tenant)):
     return service.list_products(tenant_id, supplier_id)

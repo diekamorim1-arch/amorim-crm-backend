@@ -37,6 +37,37 @@ def update_supplier(tenant_id: str, supplier_id: str, patch: dict) -> dict:
     return rows[0]
 
 
+def delete_supplier(tenant_id: str, supplier_id: str) -> None:
+    sb = get_service_client()
+    if not sb.table("suppliers").select("id").eq("tenant_id", tenant_id).eq("id", supplier_id).execute().data:
+        raise AppError(404, "not_found", "Fornecedor não encontrado.")
+
+    product_ids = [
+        p["id"]
+        for p in sb.table("supplier_products")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("supplier_id", supplier_id)
+        .execute()
+        .data
+    ]
+    if product_ids:
+        # deals.supplier_product_id é opcional e um snapshot financeiro — o
+        # valor pago já está gravado em supplier_value/gift_value/
+        # freight_value no próprio negócio, não é uma referência viva.
+        # Desvincular preserva o histórico financeiro intacto, só deixa de
+        # apontar pra um produto que está prestes a deixar de existir.
+        sb.table("deals").update({"supplier_product_id": None}).eq("tenant_id", tenant_id).in_(
+            "supplier_product_id", product_ids
+        ).execute()
+        sb.table("supplier_price_changes").delete().eq("tenant_id", tenant_id).in_(
+            "supplier_product_id", product_ids
+        ).execute()
+        sb.table("supplier_products").delete().eq("tenant_id", tenant_id).eq("supplier_id", supplier_id).execute()
+
+    sb.table("suppliers").delete().eq("tenant_id", tenant_id).eq("id", supplier_id).execute()
+
+
 def list_products(tenant_id: str, supplier_id: str) -> list[dict]:
     sb = get_service_client()
     return sb.table("supplier_products").select("*").eq("tenant_id", tenant_id).eq("supplier_id", supplier_id).execute().data
