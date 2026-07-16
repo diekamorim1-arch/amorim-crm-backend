@@ -17,7 +17,7 @@ def test_gestor_recebe_metricas_com_todas_as_chaves(client, gestor_token):
     body = response.json()
     for key in (
         "new_leads_month", "in_negotiation_value", "revenue_month", "revenue_prev_month",
-        "conversion_rate", "net_profit_month", "funnel_counts", "by_channel", "loss_ranking",
+        "conversion_rate", "expenses_month", "net_profit_month", "funnel_counts", "by_channel", "loss_ranking",
     ):
         assert key in body
 
@@ -181,6 +181,46 @@ def test_net_profit_month_subtrai_freight_value(client, gestor_token, gestor_use
     finally:
         sb.table("deals").delete().eq("id", deal["id"]).execute()
         sb.table("contacts").delete().eq("id", contact["id"]).execute()
+
+
+def test_gastos_do_mes_entram_em_expenses_month_e_descontam_net_profit(client, gestor_token, test_tenant):
+    sb = get_service_client()
+    before = client.get("/api/v1/dashboard/metrics", headers=auth_headers(gestor_token)).json()
+
+    expense = client.post(
+        "/api/v1/expenses",
+        json={"description": "Aluguel do mês", "value": 350.0},
+        headers=auth_headers(gestor_token),
+    ).json()
+    try:
+        after = client.get("/api/v1/dashboard/metrics", headers=auth_headers(gestor_token)).json()
+        assert after["expenses_month"] == pytest.approx(before["expenses_month"] + 350.0, abs=0.01)
+        # Gasto geral não tem negócio nenhum atrelado — o único efeito
+        # esperado em net_profit_month é descontar o valor cheio do gasto.
+        assert after["net_profit_month"] == pytest.approx(before["net_profit_month"] - 350.0, abs=0.01)
+    finally:
+        sb.table("expenses").delete().eq("id", expense["id"]).execute()
+
+
+def test_monthly_history_desconta_gastos_do_mes_corrente(client, gestor_token, test_tenant):
+    sb = get_service_client()
+    before = client.get(
+        "/api/v1/dashboard/monthly-history?months=1", headers=auth_headers(gestor_token)
+    ).json()[0]
+
+    expense = client.post(
+        "/api/v1/expenses",
+        json={"description": "Conta de luz", "value": 120.0},
+        headers=auth_headers(gestor_token),
+    ).json()
+    try:
+        after = client.get(
+            "/api/v1/dashboard/monthly-history?months=1", headers=auth_headers(gestor_token)
+        ).json()[0]
+        assert after["expenses"] == pytest.approx(before["expenses"] + 120.0, abs=0.01)
+        assert after["net_profit"] == pytest.approx(before["net_profit"] - 120.0, abs=0.01)
+    finally:
+        sb.table("expenses").delete().eq("id", expense["id"]).execute()
 
 
 def test_monthly_history_tem_o_mes_atual_com_dados_esperados(client, gestor_token, gestor_user_id, test_tenant):

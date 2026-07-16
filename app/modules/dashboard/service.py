@@ -47,6 +47,7 @@ def get_metrics(tenant_id: str) -> dict:
 
     contacts = sb.table("contacts").select("*").eq("tenant_id", tenant_id).execute().data
     deals = sb.table("deals").select("*").eq("tenant_id", tenant_id).execute().data
+    expenses = sb.table("expenses").select("*").eq("tenant_id", tenant_id).execute().data
 
     new_leads_month = sum(1 for c in contacts if month_start <= c["first_contact_at"] <= month_end)
 
@@ -57,8 +58,14 @@ def get_metrics(tenant_id: str) -> dict:
     won_deals = [d for d in deals if d["outcome"] == "ganho"]
     revenue_month = sum(d["value"] for d in won_deals if month_start <= d["stage_changed_at"] <= month_end)
     revenue_prev_month = sum(d["value"] for d in won_deals if prev_start <= d["stage_changed_at"] <= prev_end)
-    net_profit_month = sum(
-        _deal_net_profit(d) for d in won_deals if month_start <= d["stage_changed_at"] <= month_end
+    expenses_month = sum(e["value"] for e in expenses if month_start <= e["created_at"] <= month_end)
+    # Lucro líquido de verdade da loja no mês: soma o lucro por negócio (venda
+    # - custo de fornecedor - brindes - frete) e desconta os gastos gerais do
+    # mês (aluguel, contas etc.) — antes disso o card só refletia custo por
+    # venda, nunca o que a loja gasta pra existir.
+    net_profit_month = (
+        sum(_deal_net_profit(d) for d in won_deals if month_start <= d["stage_changed_at"] <= month_end)
+        - expenses_month
     )
 
     lost_count = sum(1 for d in deals if d["outcome"] == "perdido")
@@ -95,6 +102,7 @@ def get_metrics(tenant_id: str) -> dict:
         "revenue_month": revenue_month,
         "revenue_prev_month": revenue_prev_month,
         "conversion_rate": conversion_rate,
+        "expenses_month": expenses_month,
         "net_profit_month": net_profit_month,
         "funnel_counts": funnel_counts,
         "by_channel": by_channel,
@@ -114,6 +122,7 @@ def get_monthly_history(tenant_id: str, months: int) -> list[dict]:
         .execute()
         .data
     )
+    expenses = sb.table("expenses").select("value, created_at").eq("tenant_id", tenant_id).execute().data
 
     history = []
     for i in range(months - 1, -1, -1):
@@ -121,13 +130,17 @@ def get_monthly_history(tenant_id: str, months: int) -> list[dict]:
         month_start, month_end = _month_bounds(ref)
         new_leads = sum(1 for c in contacts if month_start <= c["first_contact_at"] <= month_end)
         month_deals = [d for d in won_deals if month_start <= d["stage_changed_at"] <= month_end]
+        month_expenses = sum(e["value"] for e in expenses if month_start <= e["created_at"] <= month_end)
         history.append(
             {
                 "month": f"{MONTH_NAMES_PT[ref.month - 1]}/{ref.year}",
                 "month_key": f"{ref.year}-{ref.month:02d}",
                 "new_leads": new_leads,
                 "revenue": sum(d["value"] for d in month_deals),
-                "net_profit": sum(_deal_net_profit(d) for d in month_deals),
+                "expenses": month_expenses,
+                # Desconta os gastos gerais daquele mês — mesma lógica de
+                # get_metrics, agora aplicada a cada mês do histórico.
+                "net_profit": sum(_deal_net_profit(d) for d in month_deals) - month_expenses,
             }
         )
     return history

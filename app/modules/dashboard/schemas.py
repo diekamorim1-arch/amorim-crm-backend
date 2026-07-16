@@ -24,6 +24,7 @@ class DashboardMetrics(BaseModel):
     revenue_month: float
     revenue_prev_month: float
     conversion_rate: float
+    expenses_month: float
     net_profit_month: float
     funnel_counts: list[FunnelCount]
     by_channel: list[ChannelStat]
@@ -35,6 +36,7 @@ class MonthlyHistoryItem(BaseModel):
     month_key: str
     new_leads: int
     revenue: float
+    expenses: float
     net_profit: float
 
 
